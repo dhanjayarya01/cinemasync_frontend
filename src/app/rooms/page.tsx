@@ -17,79 +17,145 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Play, Users, Lock, Globe, Crown, Plus, Search, LogOut, User, Loader2, X } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { getToken, logout } from "@/lib/auth"
 
-const mockRooms = [
-  {
-    id: "1",
-    name: "Marvel Movie Marathon",
-    movie: "Avengers: Endgame",
-    host: "John Doe",
-    hostAvatar: "/placeholder.svg?height=40&width=40",
-    participants: 12,
-    isPrivate: false,
-    isPaid: false,
-    description: "Join us for an epic Marvel marathon! Starting with Endgame tonight.",
-    category: "Action",
-    mediaSource: "youtube",
-  },
-  {
-    id: "2",
-    name: "Horror Night 🎃",
-    movie: "The Conjuring",
-    host: "Sarah Wilson",
-    hostAvatar: "/placeholder.svg?height=40&width=40",
-    participants: 8,
-    isPrivate: false,
-    isPaid: true,
-    description: "Scary movie night for horror enthusiasts. Bring your courage!",
-    category: "Horror",
-    mediaSource: "upload",
-  },
-]
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+
+interface Room {
+  id: string
+  name: string
+  description: string
+  host: {
+    id: string
+    name: string
+    picture: string
+  }
+  movie: {
+    name: string
+    year?: number
+    poster?: string
+    duration?: number
+    genre?: string
+  }
+  isPrivate: boolean
+  maxParticipants: number
+  currentParticipants: number
+  status: string
+  tags: string[]
+  createdAt: string
+}
 
 export default function RoomsPage() {
   const [user, setUser] = useState<any>(null)
+  const [rooms, setRooms] = useState<Room[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [isLoadingRooms, setIsLoadingRooms] = useState(true)
   const [newRoom, setNewRoom] = useState({
     name: "",
-    movie: "",
+    description: "",
+    movieName: "",
+    movieYear: "",
+    movieGenre: "",
     isPrivate: false,
-    roomKey: "",
+    password: "",
+    maxParticipants: 50,
+    tags: [] as string[]
   })
   const router = useRouter()
 
   useEffect(() => {
     const userData = localStorage.getItem("user")
-    if (!userData) {
+    const token = getToken()
+    
+    if (!userData || !token) {
       router.push("/auth")
       return
     }
+    
     setUser(JSON.parse(userData))
+    fetchRooms()
   }, [router])
 
+  const fetchRooms = async () => {
+    try {
+      setIsLoadingRooms(true)
+      const response = await fetch(`${API_BASE_URL}/api/rooms`)
+      const data = await response.json()
+      
+      if (data.success) {
+        setRooms(data.rooms)
+      }
+    } catch (error) {
+      console.error('Failed to fetch rooms:', error)
+    } finally {
+      setIsLoadingRooms(false)
+    }
+  }
+
   const handleLogout = () => {
-    localStorage.removeItem("user")
+    logout()
     router.push("/")
   }
 
-  const filteredRooms = mockRooms.filter(
+  const filteredRooms = rooms.filter(
     (room) =>
       room.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      room.movie.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      room.category.toLowerCase().includes(searchTerm.toLowerCase()),
+      room.movie.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      room.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
   )
 
-  const handleCreateRoom = () => {
-    setIsLoading(true)
-    setTimeout(() => {
-      console.log("Creating room:", newRoom)
-      setIsCreateModalOpen(false)
+  const handleCreateRoom = async () => {
+    try {
+      setIsLoading(true)
+      const token = getToken()
+      
+      const response = await fetch(`${API_BASE_URL}/api/rooms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: newRoom.name,
+          description: newRoom.description,
+          movieName: newRoom.movieName,
+          movieYear: newRoom.movieYear ? parseInt(newRoom.movieYear) : undefined,
+          movieGenre: newRoom.movieGenre,
+          isPrivate: newRoom.isPrivate,
+          password: newRoom.password || undefined,
+          maxParticipants: newRoom.maxParticipants,
+          tags: newRoom.tags
+        })
+      })
+
+      const data = await response.json()
+      
+      if (data.success) {
+        setIsCreateModalOpen(false)
+        setNewRoom({
+          name: "",
+          description: "",
+          movieName: "",
+          movieYear: "",
+          movieGenre: "",
+          isPrivate: false,
+          password: "",
+          maxParticipants: 50,
+          tags: []
+        })
+        router.push(`/theater/${data.room.id}`)
+      } else {
+        alert(data.error || 'Failed to create room')
+      }
+    } catch (error) {
+      console.error('Failed to create room:', error)
+      alert('Failed to create room')
+    } finally {
       setIsLoading(false)
-      router.push(`/theater/new-room`)
-    }, 1000)
+    }
   }
 
   const handleJoinRoom = (roomId: string) => {
@@ -124,7 +190,7 @@ export default function RoomsPage() {
               <DrawerTrigger asChild>
                 <Button variant="ghost" className="relative h-10 w-10 rounded-full hover-lift">
                   <Avatar className="h-8 w-8 transition-all duration-300 hover:scale-110">
-                    <AvatarImage src={user.avatar || "/placeholder.svg"} alt={user.name} />
+                    <AvatarImage src={user.picture || "/placeholder.svg"} alt={user.name} />
                     <AvatarFallback className="bg-purple-600 text-white">
                       {user.name
                         .split(" ")
@@ -189,82 +255,102 @@ export default function RoomsPage() {
 
             {/* Room Cards */}
             <div className="space-y-4">
-              {filteredRooms.map((room, index) => (
-                <Card
-                  key={room.id}
-                  className="bg-white/10 backdrop-blur-sm border-white/20 text-white hover:bg-white/15 transition-all duration-500 hover:scale-105 hover-lift animate-fadeInUp group cursor-pointer"
-                  style={{ animationDelay: `${index * 100}ms` }}
-                >
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <CardTitle className="text-lg transition-colors duration-300 group-hover:text-purple-300">
-                            {room.name}
-                          </CardTitle>
-                          {room.isPrivate && (
-                            <Lock className="h-4 w-4 text-yellow-400 transition-all duration-300 group-hover:scale-110" />
-                          )}
-                          {!room.isPrivate && (
-                            <Globe className="h-4 w-4 text-green-400 transition-all duration-300 group-hover:scale-110" />
-                          )}
-                          {room.isPaid && (
-                            <Crown className="h-4 w-4 text-purple-400 transition-all duration-300 group-hover:scale-110 group-hover:rotate-12" />
-                          )}
-                        </div>
-                        <CardDescription className="text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
-                          <span className="font-medium text-purple-300">Now Playing:</span> {room.movie}
-                        </CardDescription>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Avatar className="h-8 w-8 transition-all duration-300 group-hover:scale-110">
-                          <AvatarImage src={room.hostAvatar || "/placeholder.svg"} />
-                          <AvatarFallback>
-                            {room.host
-                              .split(" ")
-                              .map((n) => n[0])
-                              .join("")}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="text-sm">
-                          <div className="text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
-                            {room.host}
+              {isLoadingRooms ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-white flex items-center space-x-2">
+                    <Loader2 className="w-6 h-6 animate-spin" />
+                    <span>Loading rooms...</span>
+                  </div>
+                </div>
+              ) : filteredRooms.length === 0 ? (
+                <div className="text-center py-12">
+                  <div className="text-gray-400 mb-4">No rooms found</div>
+                  <Button
+                    onClick={() => setIsCreateModalOpen(true)}
+                    className="bg-purple-600 hover:bg-purple-700"
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create First Room
+                  </Button>
+                </div>
+              ) : (
+                filteredRooms.map((room, index) => (
+                  <Card
+                    key={room.id}
+                    className="bg-white/10 backdrop-blur-sm border-white/20 text-white hover:bg-white/15 transition-all duration-500 hover:scale-105 hover-lift animate-fadeInUp group cursor-pointer"
+                    style={{ animationDelay: `${index * 100}ms` }}
+                  >
+                    <CardHeader>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <CardTitle className="text-lg transition-colors duration-300 group-hover:text-purple-300">
+                              {room.name}
+                            </CardTitle>
+                            {room.isPrivate && (
+                              <Lock className="h-4 w-4 text-yellow-400 transition-all duration-300 group-hover:scale-110" />
+                            )}
+                            {!room.isPrivate && (
+                              <Globe className="h-4 w-4 text-green-400 transition-all duration-300 group-hover:scale-110" />
+                            )}
                           </div>
-                          <div className="text-xs text-gray-400">Host</div>
+                          <CardDescription className="text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
+                            <span className="font-medium text-purple-300">Now Playing:</span> {room.movie.name}
+                            {room.movie.year && ` (${room.movie.year})`}
+                          </CardDescription>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <Avatar className="h-8 w-8 transition-all duration-300 group-hover:scale-110">
+                            <AvatarImage src={room.host.picture || "/placeholder.svg"} />
+                            <AvatarFallback>
+                              {room.host.name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="text-sm">
+                            <div className="text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
+                              {room.host.name}
+                            </div>
+                            <div className="text-xs text-gray-400">Host</div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-gray-300 mb-4 group-hover:text-gray-200 transition-colors duration-300">
-                      {room.description}
-                    </p>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-4">
-                        <div className="flex items-center space-x-1">
-                          <Users className="h-4 w-4 text-gray-400 transition-all duration-300 group-hover:scale-110" />
-                          <span className="text-sm text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
-                            {room.participants} watching
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-gray-300 mb-4 group-hover:text-gray-200 transition-colors duration-300">
+                        {room.description || "No description available"}
+                      </p>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-4">
+                          <div className="flex items-center space-x-1">
+                            <Users className="h-4 w-4 text-gray-400 transition-all duration-300 group-hover:scale-110" />
+                            <span className="text-sm text-gray-300 group-hover:text-gray-200 transition-colors duration-300">
+                              {room.currentParticipants}/{room.maxParticipants} watching
+                            </span>
+                          </div>
+                          {room.movie.genre && (
+                            <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-xs rounded-full transition-all duration-300 hover:scale-105">
+                              {room.movie.genre}
+                            </span>
+                          )}
+                          <span className="px-2 py-1 bg-blue-600/20 text-blue-300 text-xs rounded-full transition-all duration-300 hover:scale-105">
+                            {room.status}
                           </span>
                         </div>
-                        <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-xs rounded-full transition-all duration-300 hover:scale-105">
-                          {room.category}
-                        </span>
-                        <span className="px-2 py-1 bg-blue-600/20 text-blue-300 text-xs rounded-full transition-all duration-300 hover:scale-105">
-                          {room.mediaSource === "youtube" ? "YouTube" : "Upload"}
-                        </span>
+                        <Button
+                          onClick={() => handleJoinRoom(room.id)}
+                          className="bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 hover-glow group/button"
+                        >
+                          <Play className="mr-2 h-4 w-4 transition-transform duration-300 group-hover/button:scale-110" />
+                          Join Room
+                        </Button>
                       </div>
-                      <Button
-                        onClick={() => handleJoinRoom(room.id)}
-                        className="bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 hover-glow group/button"
-                      >
-                        <Play className="mr-2 h-4 w-4 transition-transform duration-300 group-hover/button:scale-110" />
-                        Join Room
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))
+              )}
             </div>
           </div>
 
@@ -328,6 +414,19 @@ export default function RoomsPage() {
                     />
                   </div>
 
+                  <div className="animate-fadeInUp delay-150">
+                    <label htmlFor="room-description" className="text-gray-900 text-sm font-medium block mb-2">
+                      Description
+                    </label>
+                    <Input
+                      id="room-description"
+                      placeholder="Enter room description"
+                      value={newRoom.description}
+                      onChange={(e) => setNewRoom({ ...newRoom, description: e.target.value })}
+                      className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    />
+                  </div>
+
                   <div className="animate-fadeInUp delay-200">
                     <label htmlFor="movie-name" className="text-gray-900 text-sm font-medium block mb-2">
                       Movie Name
@@ -335,10 +434,37 @@ export default function RoomsPage() {
                     <Input
                       id="movie-name"
                       placeholder="Enter movie name"
-                      value={newRoom.movie}
-                      onChange={(e) => setNewRoom({ ...newRoom, movie: e.target.value })}
+                      value={newRoom.movieName}
+                      onChange={(e) => setNewRoom({ ...newRoom, movieName: e.target.value })}
                       className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                     />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 animate-fadeInUp delay-250">
+                    <div>
+                      <label htmlFor="movie-year" className="text-gray-900 text-sm font-medium block mb-2">
+                        Movie Year
+                      </label>
+                      <Input
+                        id="movie-year"
+                        placeholder="2024"
+                        value={newRoom.movieYear}
+                        onChange={(e) => setNewRoom({ ...newRoom, movieYear: e.target.value })}
+                        className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="movie-genre" className="text-gray-900 text-sm font-medium block mb-2">
+                        Genre
+                      </label>
+                      <Input
+                        id="movie-genre"
+                        placeholder="Action, Drama, etc."
+                        value={newRoom.movieGenre}
+                        onChange={(e) => setNewRoom({ ...newRoom, movieGenre: e.target.value })}
+                        className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      />
+                    </div>
                   </div>
 
                   <div className="animate-fadeInUp delay-300">
@@ -347,7 +473,7 @@ export default function RoomsPage() {
                       <Button
                         type="button"
                         variant={!newRoom.isPrivate ? "default" : "outline"}
-                        onClick={() => setNewRoom({ ...newRoom, isPrivate: false, roomKey: "" })}
+                        onClick={() => setNewRoom({ ...newRoom, isPrivate: false, password: "" })}
                         className="transition-all duration-300 hover:scale-105"
                       >
                         <Globe className="mr-2 h-4 w-4" />
@@ -367,14 +493,15 @@ export default function RoomsPage() {
 
                   {newRoom.isPrivate && (
                     <div className="animate-fadeIn">
-                      <label htmlFor="room-key" className="text-gray-900 text-sm font-medium block mb-2">
-                        Room Key
+                      <label htmlFor="room-password" className="text-gray-900 text-sm font-medium block mb-2">
+                        Room Password
                       </label>
                       <Input
-                        id="room-key"
-                        placeholder="Enter room key"
-                        value={newRoom.roomKey || ""}
-                        onChange={(e) => setNewRoom({ ...newRoom, roomKey: e.target.value })}
+                        id="room-password"
+                        type="password"
+                        placeholder="Enter room password"
+                        value={newRoom.password}
+                        onChange={(e) => setNewRoom({ ...newRoom, password: e.target.value })}
                         className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                       />
                     </div>
@@ -382,7 +509,7 @@ export default function RoomsPage() {
 
                   <Button
                     onClick={handleCreateRoom}
-                    disabled={isLoading || !newRoom.name || !newRoom.movie || (newRoom.isPrivate && !newRoom.roomKey)}
+                    disabled={isLoading || !newRoom.name || !newRoom.movieName || (newRoom.isPrivate && !newRoom.password)}
                     className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isLoading ? (

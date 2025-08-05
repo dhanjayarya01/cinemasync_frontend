@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -31,103 +30,208 @@ import {
   StopCircle,
   ChevronRight,
   ChevronLeft,
+  Crown,
+  AlertCircle,
+  CheckCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket"
+import { webrtcManager } from "@/lib/webrtc"
+import { getToken, getCurrentUser } from "@/lib/auth"
 
-const mockMessages = [
-  {
-    id: 1,
-    user: "John Doe",
-    avatar: "/placeholder.svg?height=32&width=32",
-    message: "This movie is amazing!",
-    timestamp: "10:30 PM",
-    isPrivate: false,
-    type: "text",
-  },
-  {
-    id: 2,
-    user: "Sarah Wilson",
-    avatar: "/placeholder.svg?height=32&width=32",
-    message: "I love this scene!",
-    timestamp: "10:32 PM",
-    isPrivate: false,
-    type: "text",
-  },
-]
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 
-const mockParticipants = [
-  {
-    id: 1,
-    name: "John Doe",
-    avatar: "/placeholder.svg?height=40&width=40",
-    isHost: true,
-    isMuted: false,
-    hasVideo: true,
-  },
-  {
-    id: 2,
-    name: "Sarah Wilson",
-    avatar: "/placeholder.svg?height=40&width=40",
-    isHost: false,
-    isMuted: false,
-    hasVideo: true,
-  },
-]
-
-export default function TheaterPage({ params }: { params: { roomId: string } }) {
+export default function TheaterPage({ params }: { params: Promise<{ roomId: string }> }) {
   const [user, setUser] = useState<any>(null)
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null)
+  const [participants, setParticipants] = useState<Participant[]>([])
+  const [messages, setMessages] = useState<SocketMessage[]>([])
+  const [isConnected, setIsConnected] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // Video states
   const [isPlaying, setIsPlaying] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
-  const [message, setMessage] = useState("")
-  const [messages, setMessages] = useState(mockMessages)
-  const [isMicMuted, setIsMicMuted] = useState(false)
-  const [isVideoOn, setIsVideoOn] = useState(true)
-  const [isInCall, setIsInCall] = useState(false)
-  const [activeTab, setActiveTab] = useState("group")
-  const [youtubeUrl, setYoutubeUrl] = useState("")
-  const [isLoadingVideo, setIsLoadingVideo] = useState(false)
-  const [currentVideoType, setCurrentVideoType] = useState<"youtube" | "screen" | "file" | null>(null)
-  const [isRecording, setIsRecording] = useState(false)
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
-  const [screenStream, setScreenStream] = useState<MediaStream | null>(null)
-  const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null)
-  const [youtubeVideoId, setYoutubeVideoId] = useState<string | null>(null)
-  const [currentVideoUrl, setCurrentVideoUrl] = useState<string | null>(null)
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  const [isChatVisible, setIsChatVisible] = useState(true)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Chat states
+  const [message, setMessage] = useState("")
+  const [activeTab, setActiveTab] = useState<"group" | "private">("group")
+  const [isChatVisible, setIsChatVisible] = useState(true)
+
+  // Video call states
+  const [isMicMuted, setIsMicMuted] = useState(false)
+  const [isVideoOn, setIsVideoOn] = useState(true)
+  const [isInCall, setIsInCall] = useState(false)
+
+  // Video selection states
+  const [youtubeUrl, setYoutubeUrl] = useState("")
+  const [isLoadingVideo, setIsLoadingVideo] = useState(false)
+  const [currentVideoType, setCurrentVideoType] = useState<"youtube" | "screen" | "file" | null>(null)
+  const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null)
+  const [youtubeVideoId, setYoutubeVideoId] = useState<string | null>(null)
+
+  // Refs
   const videoRef = useRef<HTMLVideoElement>(null)
   const screenVideoRef = useRef<HTMLVideoElement>(null)
   const youtubePlayerRef = useRef<HTMLIFrameElement>(null)
   const videoContainerRef = useRef<HTMLDivElement>(null)
   const progressBarRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
 
-  useEffect(() => {
-    const userData = localStorage.getItem("user")
-    if (!userData) {
-      router.push("/auth")
-      return
-    }
-    setUser(JSON.parse(userData))
-  }, [router])
+  // Check if user is host
+  const isHost = user?.id === roomInfo?.host?.id
 
-  // Extract YouTube video ID from URL
+  useEffect(() => {
+    const initializeRoom = async () => {
+      try {
+        const resolvedParams = await params
+        const userData = getCurrentUser()
+        const token = getToken()
+        console.log('User data:', userData)
+        console.log('Token available:', !!token)
+        
+        if (!userData || !token) {
+          console.log('No user data or token, redirecting to auth')
+          router.push("/auth")
+          return
+        }
+        setUser(userData)
+
+        // Connect to socket
+        socketManager.connect()
+
+        // Set up socket event listeners
+        socketManager.onRoomInfo((room) => {
+          console.log('Room info received:', room)
+          setRoomInfo(room)
+          // Remove duplicates from participants
+          const uniqueParticipants = room.participants.filter((participant, index, self) => 
+            index === self.findIndex(p => p.user.id === participant.user.id)
+          )
+          setParticipants(uniqueParticipants)
+          setIsLoading(false)
+        })
+
+        socketManager.onParticipantsChange((participants) => {
+          console.log('Participants updated:', participants)
+          // Remove duplicates based on user ID
+          const uniqueParticipants = participants.filter((participant, index, self) => 
+            index === self.findIndex(p => p.user.id === participant.user.id)
+          )
+          setParticipants(uniqueParticipants)
+        })
+
+        socketManager.onMessage((message) => {
+          console.log('Message received:', message)
+          setMessages(prev => {
+            // Check if message already exists to prevent duplicates
+            const exists = prev.some(m => m.id === message.id)
+            if (exists) return prev
+            return [...prev, message]
+          })
+        })
+
+        socketManager.onVideoControl((data) => {
+          console.log('Video control received:', data)
+          handleVideoControl(data)
+        })
+
+        socketManager.onVideoMetadata((metadata) => {
+          console.log('Video metadata received:', metadata)
+          handleVideoMetadata(metadata)
+        })
+
+        socketManager.onError((error) => {
+          console.error('Socket error:', error)
+          setError(error)
+        })
+
+        // Wait a bit for socket to connect, then join room
+        setTimeout(() => {
+          socketManager.joinRoom(resolvedParams.roomId)
+        }, 2000)
+
+        // Fetch room info from API
+        await fetchRoomInfo(resolvedParams.roomId)
+
+      } catch (error) {
+        console.error('Error initializing room:', error)
+        setError('Failed to join room')
+        setIsLoading(false)
+      }
+    }
+
+    initializeRoom()
+
+    return () => {
+      socketManager.leaveRoom()
+      webrtcManager.cleanup()
+    }
+  }, [params, router])
+
+  const fetchRoomInfo = async (roomId: string) => {
+    try {
+      const token = getToken()
+      const response = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+
+      const data = await response.json()
+      if (data.success) {
+        setRoomInfo(data.room)
+        setParticipants(data.room.participants)
+      } else {
+        setError(data.error || 'Failed to fetch room info')
+      }
+    } catch (error) {
+      console.error('Error fetching room info:', error)
+      setError('Failed to fetch room info')
+    }
+  }
+
+  const handleVideoControl = (data: any) => {
+    if (!isHost && videoRef.current) {
+      switch (data.type) {
+        case 'play':
+          videoRef.current.currentTime = data.currentTime || 0
+          videoRef.current.play()
+          setIsPlaying(true)
+          break
+        case 'pause':
+          videoRef.current.pause()
+          setIsPlaying(false)
+          break
+        case 'seek':
+          videoRef.current.currentTime = data.time
+          break
+      }
+    }
+  }
+
+  const handleVideoMetadata = (metadata: any) => {
+    // Handle video metadata from host
+    console.log('Received video metadata:', metadata)
+  }
+
+  // YouTube video handling
   const extractYouTubeId = (url: string): string | null => {
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/
     const match = url.match(regExp)
     return match && match[2].length === 11 ? match[2] : null
   }
 
-  // Handle YouTube URL input and auto-play
   const handleYouTubeUrlChange = (url: string) => {
     setYoutubeUrl(url)
-    if (url.trim()) {
+    if (url.trim() && isHost) {
       const videoId = extractYouTubeId(url)
       if (videoId) {
         setIsLoadingVideo(true)
@@ -136,298 +240,116 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
           setCurrentVideoType("youtube")
           setIsPlaying(true)
           setIsLoadingVideo(false)
-          setScreenStream(null)
-          setSelectedVideoFile(null)
-          setCurrentVideoUrl(null)
+          
+          // Send video metadata to peers
+          socketManager.sendVideoMetadata({
+            name: `YouTube Video - ${videoId}`,
+            size: 0,
+            type: 'youtube',
+            url: url
+          })
         }, 1000)
       }
     }
   }
 
-  // Handle screen sharing
+  // Screen sharing
   const handleShareScreen = async () => {
     try {
       setIsLoadingVideo(true)
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { mediaSource: "screen" },
-        audio: true,
-      })
-
-      setScreenStream(stream)
+      const stream = await webrtcManager.startScreenShare()
+      
       setCurrentVideoType("screen")
       setIsPlaying(true)
       setIsLoadingVideo(false)
       setYoutubeVideoId(null)
       setSelectedVideoFile(null)
-      setCurrentVideoUrl(null)
+
+      // Send metadata to peers
+      socketManager.sendVideoMetadata({
+        name: 'Screen Share',
+        size: 0,
+        type: 'screen',
+        url: 'screen-share'
+      })
 
       // Handle stream end
       stream.getVideoTracks()[0].onended = () => {
-        setScreenStream(null)
         setCurrentVideoType(null)
         setIsPlaying(false)
       }
     } catch (error) {
       console.error("Error sharing screen:", error)
       setIsLoadingVideo(false)
-      alert("Screen sharing not supported or permission denied")
+      setError("Screen sharing not supported or permission denied")
     }
   }
 
-  // Stop screen sharing
   const handleStopScreenShare = () => {
-    if (screenStream) {
-      screenStream.getTracks().forEach((track) => track.stop())
-      setScreenStream(null)
-      setCurrentVideoType(null)
-      setIsPlaying(false)
-    }
+    webrtcManager.stopScreenShare()
+    setCurrentVideoType(null)
+    setIsPlaying(false)
   }
 
-  // Handle file selection
+  // File video handling
   const handleSelectVideo = () => {
     fileInputRef.current?.click()
   }
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file && file.type.startsWith("video/")) {
       setIsLoadingVideo(true)
-      const url = URL.createObjectURL(file)
+      
+      if (isHost && videoRef.current) {
+        // Stream video to peers
+        await webrtcManager.streamVideoFile(file, videoRef.current)
+        
+        // Send metadata
+        socketManager.sendVideoMetadata({
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          url: URL.createObjectURL(file)
+        })
+      }
 
-      setTimeout(() => {
-        setSelectedVideoFile(file)
-        setCurrentVideoUrl(url)
-        setCurrentVideoType("file")
-        setIsPlaying(true)
-        setIsLoadingVideo(false)
-        setYoutubeVideoId(null)
-        setScreenStream(null)
-      }, 500)
+      setSelectedVideoFile(file)
+      setCurrentVideoType("file")
+      setIsPlaying(true)
+      setIsLoadingVideo(false)
+      setYoutubeVideoId(null)
     } else {
-      alert("Please select a valid video file")
+      setError("Please select a valid video file")
     }
   }
 
-  // Handle video upload for better quality
-  const handleUploadVideo = () => {
-    const input = document.createElement("input")
-    input.type = "file"
-    input.accept = "video/*"
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0]
-      if (file) {
-        setIsLoadingVideo(true)
-        // Simulate upload process
-        setTimeout(() => {
-          const url = URL.createObjectURL(file)
-          setSelectedVideoFile(file)
-          setCurrentVideoUrl(url)
-          setCurrentVideoType("file")
-          setIsPlaying(true)
-          setIsLoadingVideo(false)
-          setYoutubeVideoId(null)
-          setScreenStream(null)
-          console.log("Video uploaded for HD quality:", file.name)
-        }, 2000)
-      }
-    }
-    input.click()
-  }
-
-  // Handle voice recording
-  const handleVoiceMessage = async () => {
-    if (!isRecording) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        const recorder = new MediaRecorder(stream)
-        const chunks: BlobPart[] = []
-
-        recorder.ondataavailable = (e) => chunks.push(e.data)
-        recorder.onstop = () => {
-          const blob = new Blob(chunks, { type: "audio/wav" })
-          const audioUrl = URL.createObjectURL(blob)
-
-          const voiceMessage = {
-            id: messages.length + 1,
-            user: user?.name || "You",
-            avatar: user?.avatar || "/placeholder.svg?height=32&width=32",
-            message: "🎤 Voice message",
-            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            isPrivate: activeTab === "private",
-            type: "voice" as const,
-            audioUrl,
-          }
-          setMessages([...messages, voiceMessage])
-          stream.getTracks().forEach((track) => track.stop())
-        }
-
-        recorder.start()
-        setMediaRecorder(recorder)
-        setIsRecording(true)
-      } catch (error) {
-        console.error("Error accessing microphone:", error)
-        alert("Microphone access denied")
-      }
-    } else {
-      if (mediaRecorder) {
-        mediaRecorder.stop()
-        setMediaRecorder(null)
-        setIsRecording(false)
-      }
-    }
-  }
-
-  // Handle message sending
-  const handleSendMessage = () => {
-    if (message.trim()) {
-      const newMessage = {
-        id: messages.length + 1,
-        user: user?.name || "You",
-        avatar: user?.avatar || "/placeholder.svg?height=32&width=32",
-        message: message,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        isPrivate: activeTab === "private",
-        type: "text" as const,
-      }
-      setMessages([...messages, newMessage])
-      setMessage("")
-    }
-  }
-
-  // Play voice message
-  const playVoiceMessage = (audioUrl: string) => {
-    const audio = new Audio(audioUrl)
-    audio.play()
-  }
-
-  // Video player controls
+  // Video controls
   const togglePlayPause = () => {
-    if (currentVideoType === "file" && videoRef.current) {
+    if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause()
+        setIsPlaying(false)
+        if (isHost) {
+          socketManager.pauseVideo()
+        }
       } else {
         videoRef.current.play()
+        setIsPlaying(true)
+        if (isHost) {
+          socketManager.playVideo(videoRef.current.currentTime)
+        }
       }
-      setIsPlaying(!isPlaying)
-    } else if (currentVideoType === "screen" && screenVideoRef.current) {
-      // Screen sharing doesn't have play/pause
-      return
-    } else if (currentVideoType === "youtube") {
-      // YouTube player control would go here
-      setIsPlaying(!isPlaying)
     }
   }
 
   const toggleMute = () => {
-    if (currentVideoType === "file" && videoRef.current) {
+    if (videoRef.current) {
       videoRef.current.muted = !isMuted
       setIsMuted(!isMuted)
-    } else if (currentVideoType === "youtube") {
-      // YouTube player mute control would go here
-      setIsMuted(!isMuted)
     }
   }
 
-  // Toggle fullscreen
-  const toggleFullscreen = () => {
-    if (!videoContainerRef.current) return
-
-    if (!isFullscreen) {
-      if (videoContainerRef.current.requestFullscreen) {
-        videoContainerRef.current.requestFullscreen()
-      } else if ((videoContainerRef.current as any).webkitRequestFullscreen) {
-        ;(videoContainerRef.current as any).webkitRequestFullscreen()
-      } else if ((videoContainerRef.current as any).msRequestFullscreen) {
-        ;(videoContainerRef.current as any).msRequestFullscreen()
-      }
-      setIsFullscreen(true)
-    } else {
-      if (document.exitFullscreen) {
-        document.exitFullscreen()
-      } else if ((document as any).webkitExitFullscreen) {
-        ;(document as any).webkitExitFullscreen()
-      } else if ((document as any).msExitFullscreen) {
-        ;(document as any).msExitFullscreen()
-      }
-      setIsFullscreen(false)
-    }
-  }
-
-  // Listen for fullscreen change events
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
-    }
-
-    document.addEventListener("fullscreenchange", handleFullscreenChange)
-    document.addEventListener("webkitfullscreenchange", handleFullscreenChange)
-    document.addEventListener("mozfullscreenchange", handleFullscreenChange)
-    document.addEventListener("MSFullscreenChange", handleFullscreenChange)
-
-    return () => {
-      document.removeEventListener("fullscreenchange", handleFullscreenChange)
-      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange)
-      document.removeEventListener("mozfullscreenchange", handleFullscreenChange)
-      document.removeEventListener("MSFullscreenChange", handleFullscreenChange)
-    }
-  }, [])
-
-  // Update progress bar for file videos
-  useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
-
-    const updateProgress = () => {
-      setCurrentTime(video.currentTime)
-      setDuration(video.duration)
-    }
-
-    video.addEventListener("timeupdate", updateProgress)
-    video.addEventListener("loadedmetadata", updateProgress)
-
-    return () => {
-      video.removeEventListener("timeupdate", updateProgress)
-      video.removeEventListener("loadedmetadata", updateProgress)
-    }
-  }, [currentVideoType])
-
-  // Handle seeking when clicking on progress bar
-  const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!progressBarRef.current || !videoRef.current) return
-
-    const rect = progressBarRef.current.getBoundingClientRect()
-    const pos = (e.clientX - rect.left) / rect.width
-    const seekTime = pos * videoRef.current.duration
-
-    videoRef.current.currentTime = seekTime
-    setCurrentTime(seekTime)
-  }
-
-  // Format time for display (mm:ss)
-  const formatTime = (time: number) => {
-    const minutes = Math.floor(time / 60)
-    const seconds = Math.floor(time % 60)
-    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
-  }
-
-  // Set up screen video when stream changes
-  useEffect(() => {
-    if (screenStream && screenVideoRef.current) {
-      screenVideoRef.current.srcObject = screenStream
-      screenVideoRef.current.play()
-    }
-  }, [screenStream])
-
-  // Set up file video when URL changes
-  useEffect(() => {
-    if (currentVideoUrl && videoRef.current) {
-      videoRef.current.src = currentVideoUrl
-      videoRef.current.play()
-    }
-  }, [currentVideoUrl])
-
-  // Handle volume change
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVolume = Number.parseFloat(e.target.value)
     setVolume(newVolume)
@@ -439,6 +361,93 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
     setIsMuted(newVolume === 0)
   }
 
+  const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!progressBarRef.current || !videoRef.current) return
+
+    const rect = progressBarRef.current.getBoundingClientRect()
+    const pos = (e.clientX - rect.left) / rect.width
+    const seekTime = pos * videoRef.current.duration
+
+    videoRef.current.currentTime = seekTime
+    setCurrentTime(seekTime)
+
+    if (isHost) {
+      socketManager.seekVideo(seekTime)
+    }
+  }
+
+  // Chat functions
+  const handleSendMessage = () => {
+    if (message.trim()) {
+      socketManager.sendMessage(message, activeTab === "private")
+      setMessage("")
+    }
+  }
+
+  // Video call functions
+  const toggleMic = async () => {
+    try {
+      if (!isMicMuted) {
+        await webrtcManager.startLocalStream({ audio: true, video: false })
+      } else {
+        webrtcManager.cleanup()
+      }
+      setIsMicMuted(!isMicMuted)
+    } catch (error) {
+      console.error('Error toggling mic:', error)
+      setError('Failed to access microphone')
+    }
+  }
+
+  const toggleVideo = async () => {
+    try {
+      if (!isVideoOn) {
+        await webrtcManager.startLocalStream({ video: true, audio: true })
+      } else {
+        webrtcManager.cleanup()
+      }
+      setIsVideoOn(!isVideoOn)
+    } catch (error) {
+      console.error('Error toggling video:', error)
+      setError('Failed to access camera')
+    }
+  }
+
+  const toggleCall = () => {
+    setIsInCall(!isInCall)
+    if (!isInCall) {
+      // Join call
+      webrtcManager.startLocalStream()
+    } else {
+      // Leave call
+      webrtcManager.cleanup()
+    }
+  }
+
+  // Utility functions
+  const formatTime = (time: number) => {
+    const minutes = Math.floor(time / 60)
+    const seconds = Math.floor(time % 60)
+    return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+  }
+
+  const toggleFullscreen = () => {
+    if (!videoContainerRef.current) return
+
+    if (!isFullscreen) {
+      if (videoContainerRef.current.requestFullscreen) {
+        videoContainerRef.current.requestFullscreen()
+      }
+      setIsFullscreen(true)
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen()
+      }
+      setIsFullscreen(false)
+    }
+  }
+
+  // Video player content
   const getVideoPlayerContent = () => {
     if (isLoadingVideo) {
       return (
@@ -466,7 +475,7 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
       )
     }
 
-    if (currentVideoType === "screen" && screenStream) {
+    if (currentVideoType === "screen") {
       return (
         <div className="w-full h-full relative">
           <video ref={screenVideoRef} className="w-full h-full object-contain" autoPlay muted />
@@ -485,7 +494,7 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
       )
     }
 
-    if (currentVideoType === "file" && currentVideoUrl) {
+    if (currentVideoType === "file" && selectedVideoFile) {
       return (
         <div className="w-full h-full">
           <video
@@ -494,6 +503,12 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
             autoPlay
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
+            onTimeUpdate={() => {
+              if (videoRef.current) {
+                setCurrentTime(videoRef.current.currentTime)
+                setDuration(videoRef.current.duration)
+              }
+            }}
           />
         </div>
       )
@@ -510,12 +525,27 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
     )
   }
 
-  if (!user) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
         <div className="text-white flex items-center space-x-2">
           <Loader2 className="w-6 h-6 animate-spin" />
-          <span>Loading...</span>
+          <span>Joining room...</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
+          <h3 className="text-xl font-bold text-white mb-2">Error</h3>
+          <p className="text-gray-400 mb-4">{error}</p>
+          <Button onClick={() => router.push('/rooms')} className="bg-purple-600 hover:bg-purple-700">
+            Back to Rooms
+          </Button>
         </div>
       </div>
     )
@@ -523,7 +553,7 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
 
   return (
     <div className="min-h-screen bg-black overflow-auto">
-      {/* Header - Hide in fullscreen */}
+      {/* Header */}
       {!isFullscreen && (
         <>
           <header className="bg-gray-900 border-b border-gray-800 px-4 py-3">
@@ -535,8 +565,14 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
               <div className="flex items-center space-x-4">
                 <span className="px-2 py-1 bg-green-600/20 text-green-300 text-sm rounded-full flex items-center">
                   <Users className="mr-1 h-3 w-3" />
-                  {mockParticipants.length} watching
+                  {participants.length}/5 watching
                 </span>
+                {isHost && (
+                  <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-sm rounded-full flex items-center">
+                    <Crown className="mr-1 h-3 w-3" />
+                    Host
+                  </span>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -550,50 +586,44 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
           </header>
 
           {/* Media Controls */}
-          <div className="bg-gray-900 border-b border-gray-800 px-4 py-3">
-            <div className="flex flex-col lg:flex-row gap-4">
-              {/* YouTube URL Input */}
-              <div className="flex-1 flex gap-2">
-                <Input
-                  placeholder="Paste YouTube URL here (auto-plays when pasted)..."
-                  value={youtubeUrl}
-                  onChange={(e) => handleYouTubeUrlChange(e.target.value)}
-                  className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400"
-                />
-                <div className="flex items-center px-3 bg-red-600/20 rounded-md">
-                  <Youtube className="h-4 w-4 text-red-400" />
+          {isHost && (
+            <div className="bg-gray-900 border-b border-gray-800 px-4 py-3">
+              <div className="flex flex-col lg:flex-row gap-4">
+                {/* YouTube URL Input */}
+                <div className="flex-1 flex gap-2">
+                  <Input
+                    placeholder="Paste YouTube URL here (auto-plays when pasted)..."
+                    value={youtubeUrl}
+                    onChange={(e) => handleYouTubeUrlChange(e.target.value)}
+                    className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400"
+                  />
+                  <div className="flex items-center px-3 bg-red-600/20 rounded-md">
+                    <Youtube className="h-4 w-4 text-red-400" />
+                  </div>
+                </div>
+
+                {/* Media Action Buttons */}
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleShareScreen}
+                    disabled={isLoadingVideo}
+                    className="bg-blue-600 hover:bg-blue-700 transition-all duration-300"
+                  >
+                    <Monitor className="mr-2 h-4 w-4" />
+                    Share Screen
+                  </Button>
+                  <Button
+                    onClick={handleSelectVideo}
+                    disabled={isLoadingVideo}
+                    className="bg-green-600 hover:bg-green-700 transition-all duration-300"
+                  >
+                    <Video className="mr-2 h-4 w-4" />
+                    Select Video
+                  </Button>
                 </div>
               </div>
-
-              {/* Media Action Buttons */}
-              <div className="flex gap-2">
-                <Button
-                  onClick={handleShareScreen}
-                  disabled={isLoadingVideo}
-                  className="bg-blue-600 hover:bg-blue-700 transition-all duration-300"
-                >
-                  <Monitor className="mr-2 h-4 w-4" />
-                  Share Screen
-                </Button>
-                <Button
-                  onClick={handleSelectVideo}
-                  disabled={isLoadingVideo}
-                  className="bg-green-600 hover:bg-green-700 transition-all duration-300"
-                >
-                  <Video className="mr-2 h-4 w-4" />
-                  Select Video
-                </Button>
-                <Button
-                  onClick={handleUploadVideo}
-                  disabled={isLoadingVideo}
-                  className="bg-purple-600 hover:bg-purple-700 transition-all duration-300"
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload HD
-                </Button>
-              </div>
             </div>
-          </div>
+          )}
         </>
       )}
 
@@ -696,21 +726,21 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
                   <Button
                     variant={isMicMuted ? "destructive" : "secondary"}
                     size="sm"
-                    onClick={() => setIsMicMuted(!isMicMuted)}
+                    onClick={toggleMic}
                   >
                     {isMicMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                   </Button>
                   <Button
                     variant={isVideoOn ? "secondary" : "destructive"}
                     size="sm"
-                    onClick={() => setIsVideoOn(!isVideoOn)}
+                    onClick={toggleVideo}
                   >
                     {isVideoOn ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
                   </Button>
                   <Button
                     variant={isInCall ? "destructive" : "default"}
                     size="sm"
-                    onClick={() => setIsInCall(!isInCall)}
+                    onClick={toggleCall}
                     className={isInCall ? "" : "bg-green-600 hover:bg-green-700"}
                   >
                     {isInCall ? <PhoneOff className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
@@ -721,13 +751,18 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
 
               {/* Video Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {mockParticipants.map((participant) => (
-                  <div key={participant.id} className="relative bg-gray-800 rounded-lg aspect-video overflow-hidden">
+                {participants
+                  .filter((participant, index, self) => 
+                    index === self.findIndex(p => p.user.id === participant.user.id)
+                  )
+                  .slice(0, 4)
+                  .map((participant) => (
+                  <div key={participant.user.id} className="relative bg-gray-800 rounded-lg aspect-video overflow-hidden">
                     <div className="w-full h-full bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center">
                       <Avatar className="h-12 w-12">
-                        <AvatarImage src={participant.avatar || "/placeholder.svg"} />
+                        <AvatarImage src={participant.user.picture || "/placeholder.svg"} />
                         <AvatarFallback>
-                          {participant.name
+                          {participant.user.name
                             .split(" ")
                             .map((n) => n[0])
                             .join("")}
@@ -736,7 +771,7 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
                     </div>
                     <div className="absolute bottom-1 left-1 right-1">
                       <div className="bg-black/60 rounded px-2 py-1 text-xs text-white flex items-center justify-between">
-                        <span className="truncate">{participant.name}</span>
+                        <span className="truncate">{participant.user.name}</span>
                         {participant.isHost && <span className="text-xs bg-purple-600 px-1 rounded">Host</span>}
                       </div>
                     </div>
@@ -747,7 +782,7 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
           )}
         </div>
 
-        {/* Right Side - Chat (normal or transparent overlay in fullscreen) */}
+        {/* Right Side - Chat */}
         {(!isFullscreen || (isFullscreen && isChatVisible)) && (
           <div
             className={`${
@@ -785,12 +820,12 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
               <div className="space-y-4">
                 {messages
                   .filter((msg) => (activeTab === "group" ? !msg.isPrivate : msg.isPrivate))
-                  .map((msg) => (
-                    <div key={msg.id} className="flex space-x-2">
+                  .map((msg, index) => (
+                    <div key={`${msg.id}-${index}`} className="flex space-x-2">
                       <Avatar className="h-8 w-8">
-                        <AvatarImage src={msg.avatar || "/placeholder.svg"} />
+                        <AvatarImage src={msg.user.picture || "/placeholder.svg"} />
                         <AvatarFallback className="text-xs">
-                          {msg.user
+                          {msg.user.name
                             .split(" ")
                             .map((n) => n[0])
                             .join("")}
@@ -798,22 +833,10 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
                       </Avatar>
                       <div className="flex-1">
                         <div className="flex items-center space-x-2 mb-1">
-                          <span className="text-sm font-medium text-white">{msg.user}</span>
+                          <span className="text-sm font-medium text-white">{msg.user.name}</span>
                           <span className="text-xs text-gray-400">{msg.timestamp}</span>
                         </div>
-                        <div className="flex items-center space-x-2">
-                          <p className="text-sm text-gray-300">{msg.message}</p>
-                          {msg.type === "voice" && (msg as any).audioUrl && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="p-1 h-6 w-6 hover:bg-purple-600"
-                              onClick={() => playVoiceMessage((msg as any).audioUrl)}
-                            >
-                              <Play className="h-3 w-3" />
-                            </Button>
-                          )}
-                        </div>
+                        <p className="text-sm text-gray-300">{msg.message}</p>
                       </div>
                     </div>
                   ))}
@@ -830,23 +853,10 @@ export default function TheaterPage({ params }: { params: { roomId: string } }) 
                   onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
                   className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1"
                 />
-                <Button
-                  onClick={handleVoiceMessage}
-                  variant={isRecording ? "destructive" : "secondary"}
-                  size="sm"
-                  className="px-3"
-                >
-                  <Mic className={`h-4 w-4 ${isRecording ? "animate-pulse" : ""}`} />
-                </Button>
                 <Button onClick={handleSendMessage} className="bg-purple-600 hover:bg-purple-700 px-3">
                   <Send className="h-4 w-4" />
                 </Button>
               </div>
-              {isRecording && (
-                <div className="mt-2 text-center">
-                  <span className="text-red-400 text-sm animate-pulse">🔴 Recording... Click mic to stop</span>
-                </div>
-              )}
             </div>
           </div>
         )}
