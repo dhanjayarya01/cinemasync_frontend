@@ -118,6 +118,17 @@ class SocketManager {
     this.socket.on('user-joined', (data) => {
       console.log('User joined:', data);
       this.participantCallbacks.forEach(callback => callback(data.participants));
+      // Forward to message callbacks for WebRTC host offer retry logic
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.userId || (data.user && data.user.id) || '', name: (data.user && data.user.name) || '', picture: (data.user && data.user.picture) || '' },
+          message: JSON.stringify({ type: 'user-joined', user: data.user }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
     });
 
     this.socket.on('user-left', (data) => {
@@ -148,6 +159,82 @@ class SocketManager {
     this.socket.on('video-metadata', (metadata: VideoMetadata) => {
       console.log('Video metadata received:', metadata);
       this.videoMetadataCallbacks.forEach(callback => callback(metadata));
+    });
+
+    // WebRTC signaling events
+    this.socket.on('offer', (data) => {
+      console.log('WebRTC offer received:', data);
+      // Forward to WebRTC manager
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.from, name: '', picture: '' },
+          message: JSON.stringify({ type: 'offer', from: data.from, data: data.offer }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
+    });
+
+    this.socket.on('answer', (data) => {
+      console.log('WebRTC answer received:', data);
+      // Forward to WebRTC manager
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.from, name: '', picture: '' },
+          message: JSON.stringify({ type: 'answer', from: data.from, data: data.answer }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
+    });
+
+    this.socket.on('ice-candidate', (data) => {
+      console.log('WebRTC ICE candidate received:', data);
+      // Forward to WebRTC manager
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.from, name: '', picture: '' },
+          message: JSON.stringify({ type: 'ice-candidate', from: data.from, data: data.candidate }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
+    });
+
+    this.socket.on('peer-joined', (data) => {
+      console.log('WebRTC peer joined:', data);
+      // Forward to WebRTC manager
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.peerId, name: '', picture: '' },
+          message: JSON.stringify({ type: 'peer-joined', from: data.peerId }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
+    });
+
+    this.socket.on('peer-left', (data) => {
+      console.log('WebRTC peer left:', data);
+      // Forward to WebRTC manager
+      this.messageCallbacks.forEach(callback => {
+        callback({
+          id: Date.now().toString(),
+          user: { id: data.peerId, name: '', picture: '' },
+          message: JSON.stringify({ type: 'peer-left', from: data.peerId }),
+          timestamp: new Date().toISOString(),
+          isPrivate: false,
+          type: 'text'
+        });
+      });
     });
 
     this.socket.on('error', (data) => {
@@ -233,18 +320,21 @@ class SocketManager {
   sendOffer(offer: any, to: string) {
     if (!this.socket) return;
 
+    console.log(`[Socket] Sending WebRTC offer to user ${to}`);
     this.socket.emit('offer', { offer, to });
   }
 
   sendAnswer(answer: any, to: string) {
     if (!this.socket) return;
 
+    console.log(`[Socket] Sending WebRTC answer to user ${to}`);
     this.socket.emit('answer', { answer, to });
   }
 
   sendIceCandidate(candidate: any, to: string) {
     if (!this.socket) return;
 
+    console.log(`[Socket] Sending WebRTC ICE candidate to user ${to}`);
     this.socket.emit('ice-candidate', { candidate, to });
   }
 

@@ -88,6 +88,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // Check if user is host
   const isHost = user?.id === roomInfo?.host?.id
 
+  // WebRTC connection status
+  const [webrtcStatus, setWebrtcStatus] = useState<any>(null)
+
   useEffect(() => {
     const initializeRoom = async () => {
       try {
@@ -108,6 +111,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         socketManager.connect()
 
         // Set up socket event listeners
+        let offerRetryInterval: NodeJS.Timeout | null = null;
+        let offerAttempts = 0;
+        let lastOfferedPeerId: string | null = null;
+
         socketManager.onRoomInfo((room) => {
           console.log('Room info received:', room)
           setRoomInfo(room)
@@ -130,6 +137,45 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onMessage((message) => {
           console.log('Message received:', message)
+          // Host: retry offer logic
+          try {
+            const parsed = JSON.parse(message.message);
+            // When a new user joins, host starts offer retry loop
+            if (parsed.type === 'user-joined' && isHost && parsed.user && parsed.user.id !== userData.id) {
+              const peerId = parsed.user.id;
+              lastOfferedPeerId = peerId;
+              offerAttempts = 0;
+              if (offerRetryInterval) clearInterval(offerRetryInterval);
+              offerRetryInterval = setInterval(async () => {
+                offerAttempts++;
+                console.log(`[WebRTC][Host] Attempt #${offerAttempts}: Sending offer to ${peerId}`);
+                await webrtcManager.createOffer(peerId);
+                // If connection established, stop retrying
+                const status = webrtcManager.getConnectionStatus();
+                const peerStatus = status.peers.find(p => p.id === peerId);
+                if (peerStatus && peerStatus.connected) {
+                  console.log(`[WebRTC][Host] Connection established with ${peerId}, stopping offer retry.`);
+                  clearInterval(offerRetryInterval!);
+                }
+                if (offerAttempts > 10) {
+                  console.warn(`[WebRTC][Host] Gave up after 10 attempts to connect to ${peerId}`);
+                  clearInterval(offerRetryInterval!);
+                }
+              }, 1000);
+            }
+            // Non-host: log offer/answer events
+            if (parsed.type === 'offer' && !isHost) {
+              console.log(`[WebRTC][Non-Host] Offer received from host (${parsed.from})`);
+            }
+            if (parsed.type === 'answer' && isHost) {
+              console.log(`[WebRTC][Host] Answer received from peer (${parsed.from})`);
+            }
+            if (parsed.type === 'ice-candidate') {
+              console.log(`[WebRTC] ICE candidate from ${parsed.from}`);
+            }
+          } catch (e) {
+            // Not a JSON message, continue with normal message handling
+          }
           setMessages(prev => {
             // Check if message already exists to prevent duplicates
             const exists = prev.some(m => m.id === message.id)
@@ -152,6 +198,26 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           console.error('Socket error:', error)
           setError(error)
         })
+
+        // Initialize WebRTC connections
+        const initializeWebRTC = async () => {
+          try {
+            console.log('[Theater] Initializing WebRTC connections...')
+            // Do NOT start local media stream here!
+            // Only set up WebRTC connection status monitoring
+            const statusInterval = setInterval(() => {
+              const status = webrtcManager.getConnectionStatus()
+              console.log('[Theater] WebRTC connection status:', status)
+              setWebrtcStatus(status)
+            }, 5000)
+            // Clean up interval on unmount
+            return () => clearInterval(statusInterval)
+          } catch (error) {
+            console.error('[Theater] Error initializing WebRTC:', error)
+          }
+        }
+        
+        initializeWebRTC()
 
         // Wait a bit for socket to connect, then join room
         setTimeout(() => {
@@ -298,22 +364,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
+    console.log('[Theater] File input changed:', file)
     if (file && file.type.startsWith("video/")) {
       setIsLoadingVideo(true)
-      
-      if (isHost && videoRef.current) {
-        // Stream video to peers
-        await webrtcManager.streamVideoFile(file, videoRef.current)
-        
-        // Send metadata
-        socketManager.sendVideoMetadata({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          url: URL.createObjectURL(file)
-        })
-      }
-
       setSelectedVideoFile(file)
       setCurrentVideoType("file")
       setIsPlaying(true)
@@ -323,6 +376,23 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setError("Please select a valid video file")
     }
   }
+
+  // Add this useEffect after the state declarations
+  useEffect(() => {
+    if (isHost && selectedVideoFile && videoRef.current) {
+      console.log('[Theater] Host is about to stream video file (from useEffect):', selectedVideoFile.name)
+      webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
+      // Send metadata
+      socketManager.sendVideoMetadata({
+        name: selectedVideoFile.name,
+        size: selectedVideoFile.size,
+        type: selectedVideoFile.type,
+        url: URL.createObjectURL(selectedVideoFile)
+      })
+    }
+    // Only run when selectedVideoFile or videoRef changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, selectedVideoFile, videoRef.current])
 
   // Video controls
   const togglePlayPause = () => {
@@ -413,14 +483,20 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   }
 
-  const toggleCall = () => {
-    setIsInCall(!isInCall)
+  const toggleCall = async () => {
     if (!isInCall) {
-      // Join call
-      webrtcManager.startLocalStream()
+      // Join call: request camera/mic
+      try {
+        await webrtcManager.startLocalStream({ video: true, audio: true })
+        setIsInCall(true)
+      } catch (error) {
+        console.error('Error starting video call:', error)
+        setError('Failed to access camera/mic')
+      }
     } else {
-      // Leave call
+      // Leave call: stop stream
       webrtcManager.cleanup()
+      setIsInCall(false)
     }
   }
 
@@ -571,6 +647,17 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-sm rounded-full flex items-center">
                     <Crown className="mr-1 h-3 w-3" />
                     Host
+                  </span>
+                )}
+                {/* WebRTC Status Indicator */}
+                {webrtcStatus && (
+                  <span className={`px-2 py-1 text-sm rounded-full flex items-center ${
+                    webrtcStatus.connectedPeers > 0 
+                      ? 'bg-blue-600/20 text-blue-300' 
+                      : 'bg-yellow-600/20 text-yellow-300'
+                  }`}>
+                    <CheckCircle className="mr-1 h-3 w-3" />
+                    P2P: {webrtcStatus.connectedPeers}/{webrtcStatus.totalPeers}
                   </span>
                 )}
                 <Button
