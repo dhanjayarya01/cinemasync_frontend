@@ -303,6 +303,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const handleVideoMetadata = (metadata: any) => {
     // Handle video metadata from host
     console.log('Received video metadata:', metadata)
+    if (!isHost) {
+      setCurrentVideoType('file')
+      // Ensure the receiver element is bound
+      if (videoRef.current) {
+        webrtcManager.setVideoElement(videoRef.current)
+      }
+    }
   }
 
   // YouTube video handling
@@ -389,28 +396,37 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setIsPlaying(true)
       setIsLoadingVideo(false)
       setYoutubeVideoId(null)
+      // Broadcast metadata so receivers prepare their video element
+      socketManager.sendVideoMetadata({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        url: 'p2p'
+      })
     } else {
       setError("Please select a valid video file")
     }
   }
 
-  // Handle video file streaming for host
+  // Handle video file streaming for host (avoid duplicate starts)
+  const hasStartedStreamingRef = useRef(false)
   useEffect(() => {
-    if (webrtcManager.isHostUser() && selectedVideoFile && videoRef.current) {
-      console.log('[Theater] Host is about to stream video file (from useEffect):', selectedVideoFile.name)
-      webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
-    }
-  }, [selectedVideoFile, videoRef.current])
+    if (!webrtcManager.isHostUser()) return
+    if (!selectedVideoFile) return
+    if (!videoRef.current) return
+    if (hasStartedStreamingRef.current) return
+    hasStartedStreamingRef.current = true
+    console.log('[Theater] Host is about to stream video file (from useEffect):', selectedVideoFile.name)
+    webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
+  }, [selectedVideoFile])
 
-  // Set up video element for non-host users
+  // Bind receiver video element early for non-hosts
   useEffect(() => {
-    if (!webrtcManager.isHostUser() && videoRef.current) {
-      // Non-host users need to set up video element for receiving stream
-      console.log('[Theater] Setting up video element for non-host user')
-      webrtcManager.setVideoElement(videoRef.current);
-      // The video element will be populated by WebRTC when stream is received
+    if (!isHost && videoRef.current) {
+      console.log('[Theater] Binding receiver video element for non-host')
+      webrtcManager.setVideoElement(videoRef.current)
     }
-  }, [videoRef.current])
+  }, [isHost])
 
   // Video controls
   const togglePlayPause = () => {
@@ -584,6 +600,36 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               Stop Sharing
             </Button>
           </div>
+        </div>
+      )
+    }
+
+    // For non-host, always render a receiver element to accept MSE stream even if no file is selected locally
+    if (!isHost) {
+      return (
+        <div className="w-full h-full">
+          <video
+            ref={(el) => {
+              // Assign and immediately bind to webrtc manager when available
+              // so we don't miss early chunks
+              // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+              // @ts-ignore
+              videoRef.current = el
+              if (el && !isHost) {
+                webrtcManager.setVideoElement(el)
+              }
+            }}
+            className="w-full h-full object-contain"
+            autoPlay
+            playsInline
+            muted
+            onTimeUpdate={() => {
+              if (videoRef.current) {
+                setCurrentTime(videoRef.current.currentTime)
+                setDuration(videoRef.current.duration)
+              }
+            }}
+          />
         </div>
       )
     }
