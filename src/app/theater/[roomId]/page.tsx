@@ -90,6 +90,25 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   // WebRTC connection status
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null)
+  const [webrtcConnected, setWebrtcConnected] = useState(false)
+
+  // Monitor WebRTC connection status
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const status = webrtcManager.getConnectionStatus();
+      setWebrtcStatus(status);
+      
+      if (status.connectedPeers > 0 && !webrtcConnected) {
+        setWebrtcConnected(true);
+        console.log(`[Theater] ✅ WebRTC connected to ${status.connectedPeers} peers!`);
+      } else if (status.connectedPeers === 0 && webrtcConnected) {
+        setWebrtcConnected(false);
+        console.log(`[Theater] ❌ WebRTC disconnected`);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [webrtcConnected]);
 
   useEffect(() => {
     const initializeRoom = async () => {
@@ -110,11 +129,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         // Connect to socket
         socketManager.connect()
 
-        // Set up socket event listeners
-        let offerRetryInterval: NodeJS.Timeout | null = null;
-        let offerAttempts = 0;
-        let lastOfferedPeerId: string | null = null;
+        // Initialize WebRTC manager socket listeners immediately
+        console.log('[Theater] Initializing WebRTC manager...');
+        webrtcManager.ensureSocketListeners();
 
+        // Set up socket event listeners
         socketManager.onRoomInfo((room) => {
           console.log('Room info received:', room)
           setRoomInfo(room)
@@ -123,6 +142,21 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             index === self.findIndex(p => p.user.id === participant.user.id)
           )
           setParticipants(uniqueParticipants)
+          
+          // Set host status in WebRTC manager
+          const isHostUser = userData?.id === room.host?.id;
+          console.log(`[Theater] User ${userData?.id} is host: ${isHostUser} (room host: ${room.host?.id})`);
+          webrtcManager.setHostStatus(isHostUser);
+          
+          // Ensure WebRTC socket listeners are set up for all users
+          webrtcManager.ensureSocketListeners();
+
+          // Host proactively connects to all existing participants
+          const userIds = uniqueParticipants.map(p => p.user.id)
+          if (isHostUser && userData?.id) {
+            webrtcManager.ensureConnectionsTo(userIds, userData.id)
+          }
+          
           setIsLoading(false)
         })
 
@@ -133,45 +167,28 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             index === self.findIndex(p => p.user.id === participant.user.id)
           )
           setParticipants(uniqueParticipants)
+
+          // Auto-initiate WebRTC from host to all others
+          const userIds = uniqueParticipants.map(p => p.user.id)
+          if (webrtcManager.isHostUser() && userData?.id) {
+            webrtcManager.ensureConnectionsTo(userIds, userData.id)
+          }
         })
 
         socketManager.onMessage((message) => {
           console.log('Message received:', message)
-          // Host: retry offer logic
+          // Handle WebRTC signaling for user joins
           try {
             const parsed = JSON.parse(message.message);
-            // When a new user joins, host starts offer retry loop
-            if (parsed.type === 'user-joined' && isHost && parsed.user && parsed.user.id !== userData.id) {
+            if (parsed.type === 'user-joined' && parsed.user && parsed.user.id !== userData.id) {
               const peerId = parsed.user.id;
-              lastOfferedPeerId = peerId;
-              offerAttempts = 0;
-              if (offerRetryInterval) clearInterval(offerRetryInterval);
-              offerRetryInterval = setInterval(async () => {
-                offerAttempts++;
-                console.log(`[WebRTC][Host] Attempt #${offerAttempts}: Sending offer to ${peerId}`);
-                await webrtcManager.createOffer(peerId);
-                // If connection established, stop retrying
-                const status = webrtcManager.getConnectionStatus();
-                const peerStatus = status.peers.find(p => p.id === peerId);
-                if (peerStatus && peerStatus.connected) {
-                  console.log(`[WebRTC][Host] Connection established with ${peerId}, stopping offer retry.`);
-                  clearInterval(offerRetryInterval!);
-                }
-                if (offerAttempts > 10) {
-                  console.warn(`[WebRTC][Host] Gave up after 10 attempts to connect to ${peerId}`);
-                  clearInterval(offerRetryInterval!);
-                }
-              }, 1000);
-            }
-            // Non-host: log offer/answer events
-            if (parsed.type === 'offer' && !isHost) {
-              console.log(`[WebRTC][Non-Host] Offer received from host (${parsed.from})`);
-            }
-            if (parsed.type === 'answer' && isHost) {
-              console.log(`[WebRTC][Host] Answer received from peer (${parsed.from})`);
-            }
-            if (parsed.type === 'ice-candidate') {
-              console.log(`[WebRTC] ICE candidate from ${parsed.from}`);
+              console.log(`[Theater] New user joined: ${peerId}, isHost: ${webrtcManager.isHostUser()}`);
+              
+              // If we're the host, send offer to the new user
+              if (webrtcManager.isHostUser()) {
+                console.log(`[Theater] Host sending offer to new user ${peerId}`);
+                webrtcManager.createOffer(peerId);
+              }
             }
           } catch (e) {
             // Not a JSON message, continue with normal message handling
@@ -377,22 +394,23 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   }
 
-  // Add this useEffect after the state declarations
+  // Handle video file streaming for host
   useEffect(() => {
-    if (isHost && selectedVideoFile && videoRef.current) {
+    if (webrtcManager.isHostUser() && selectedVideoFile && videoRef.current) {
       console.log('[Theater] Host is about to stream video file (from useEffect):', selectedVideoFile.name)
       webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
-      // Send metadata
-      socketManager.sendVideoMetadata({
-        name: selectedVideoFile.name,
-        size: selectedVideoFile.size,
-        type: selectedVideoFile.type,
-        url: URL.createObjectURL(selectedVideoFile)
-      })
     }
-    // Only run when selectedVideoFile or videoRef changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, selectedVideoFile, videoRef.current])
+  }, [selectedVideoFile, videoRef.current])
+
+  // Set up video element for non-host users
+  useEffect(() => {
+    if (!webrtcManager.isHostUser() && videoRef.current) {
+      // Non-host users need to set up video element for receiving stream
+      console.log('[Theater] Setting up video element for non-host user')
+      webrtcManager.setVideoElement(videoRef.current);
+      // The video element will be populated by WebRTC when stream is received
+    }
+  }, [videoRef.current])
 
   // Video controls
   const togglePlayPause = () => {
@@ -651,15 +669,77 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 )}
                 {/* WebRTC Status Indicator */}
                 {webrtcStatus && (
-                  <span className={`px-2 py-1 text-sm rounded-full flex items-center ${
-                    webrtcStatus.connectedPeers > 0 
-                      ? 'bg-blue-600/20 text-blue-300' 
-                      : 'bg-yellow-600/20 text-yellow-300'
+                  <div className={`fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium ${
+                    webrtcStatus.connectedPeers > 0
+                      ? 'bg-green-500 text-white'
+                      : 'bg-yellow-500 text-black'
                   }`}>
-                    <CheckCircle className="mr-1 h-3 w-3" />
                     P2P: {webrtcStatus.connectedPeers}/{webrtcStatus.totalPeers}
-                  </span>
+                  </div>
                 )}
+
+                {/* WebRTC Connection Status */}
+                {webrtcConnected && (
+                  <div className="fixed top-4 left-4 z-50 px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-medium">
+                    ✅ WebRTC Connected
+                  </div>
+                )}
+
+                {/* WebRTC Test Button */}
+                <button
+                  onClick={() => {
+                    console.log('[Theater] Testing WebRTC connection...');
+                    webrtcManager.testConnection();
+                  }}
+                  className="fixed top-16 right-4 z-50 px-3 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600"
+                >
+                  Test WebRTC
+                </button>
+
+                {/* WebRTC Signaling Test Button */}
+                <button
+                  onClick={() => {
+                    console.log('[Theater] Testing WebRTC signaling...');
+                    webrtcManager.testSignaling();
+                  }}
+                  className="fixed top-32 right-4 z-50 px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600"
+                >
+                  Test Signaling
+                </button>
+
+                {/* Simple Message Test Button */}
+                <button
+                  onClick={() => {
+                    console.log('[Theater] Sending test message...');
+                    socketManager.sendMessage('Test message from ' + (webrtcManager.isHostUser() ? 'host' : 'non-host'));
+                  }}
+                  className="fixed top-48 right-4 z-50 px-3 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
+                >
+                  Send Test Message
+                </button>
+
+                {/* Manual WebRTC Test Button */}
+                <button
+                  onClick={async () => {
+                    console.log('[Theater] Manual WebRTC test...');
+                    console.log('[Theater] Socket connected:', socketManager.isSocketConnected());
+                    console.log('[Theater] User:', user);
+                    console.log('[Theater] Participants:', participants);
+                    console.log('[Theater] Is host:', webrtcManager.isHostUser());
+                    
+                    // Get the other user's ID from participants
+                    const otherUser = participants.find(p => p.user.id !== user?.id);
+                    if (otherUser) {
+                      console.log(`[Theater] Testing connection with ${otherUser.user.id}`);
+                      await webrtcManager.testCreateConnection(otherUser.user.id);
+                    } else {
+                      console.log('[Theater] No other user found');
+                    }
+                  }}
+                  className="fixed top-64 right-4 z-50 px-3 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600"
+                >
+                  Manual WebRTC Test
+                </button>
                 <Button
                   variant="outline"
                   size="sm"

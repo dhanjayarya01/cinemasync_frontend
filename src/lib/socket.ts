@@ -77,6 +77,16 @@ class SocketManager {
   private videoMetadataCallbacks: ((metadata: VideoMetadata) => void)[] = [];
   private roomInfoCallbacks: ((room: RoomInfo) => void)[] = [];
   private errorCallbacks: ((error: string) => void)[] = [];
+  // Add WebRTC specific callbacks
+  private webrtcOfferCallbacks: ((data: { from: string; offer: any }) => void)[] = [];
+  private webrtcAnswerCallbacks: ((data: { from: string; answer: any }) => void)[] = [];
+  private webrtcIceCandidateCallbacks: ((data: { from: string; candidate: any }) => void)[] = [];
+  private webrtcPeerJoinedCallbacks: ((data: { peerId: string }) => void)[] = [];
+  private webrtcPeerLeftCallbacks: ((data: { peerId: string }) => void)[] = [];
+  // Pending signaling events if callbacks are not yet registered
+  private pendingOffers: { from: string; offer: any }[] = [];
+  private pendingAnswers: { from: string; answer: any }[] = [];
+  private pendingIceCandidates: { from: string; candidate: any }[] = [];
 
   connect() {
     if (this.socket) return;
@@ -164,77 +174,48 @@ class SocketManager {
     // WebRTC signaling events
     this.socket.on('offer', (data) => {
       console.log('WebRTC offer received:', data);
-      // Forward to WebRTC manager
-      this.messageCallbacks.forEach(callback => {
-        callback({
-          id: Date.now().toString(),
-          user: { id: data.from, name: '', picture: '' },
-          message: JSON.stringify({ type: 'offer', from: data.from, data: data.offer }),
-          timestamp: new Date().toISOString(),
-          isPrivate: false,
-          type: 'text'
-        });
-      });
+      console.log('WebRTC offer callbacks count:', this.webrtcOfferCallbacks.length);
+      // Use dedicated WebRTC callbacks, or queue if none yet
+      if (this.webrtcOfferCallbacks.length > 0) {
+        this.webrtcOfferCallbacks.forEach(callback => callback({ from: data.from, offer: data.offer }));
+      } else {
+        console.warn('[Socket] No WebRTC offer listeners yet; queueing offer');
+        this.pendingOffers.push({ from: data.from, offer: data.offer });
+      }
     });
 
     this.socket.on('answer', (data) => {
       console.log('WebRTC answer received:', data);
-      // Forward to WebRTC manager
-      this.messageCallbacks.forEach(callback => {
-        callback({
-          id: Date.now().toString(),
-          user: { id: data.from, name: '', picture: '' },
-          message: JSON.stringify({ type: 'answer', from: data.from, data: data.answer }),
-          timestamp: new Date().toISOString(),
-          isPrivate: false,
-          type: 'text'
-        });
-      });
+      console.log('WebRTC answer callbacks count:', this.webrtcAnswerCallbacks.length);
+      if (this.webrtcAnswerCallbacks.length > 0) {
+        this.webrtcAnswerCallbacks.forEach(callback => callback({ from: data.from, answer: data.answer }));
+      } else {
+        console.warn('[Socket] No WebRTC answer listeners yet; queueing answer');
+        this.pendingAnswers.push({ from: data.from, answer: data.answer });
+      }
     });
 
     this.socket.on('ice-candidate', (data) => {
       console.log('WebRTC ICE candidate received:', data);
-      // Forward to WebRTC manager
-      this.messageCallbacks.forEach(callback => {
-        callback({
-          id: Date.now().toString(),
-          user: { id: data.from, name: '', picture: '' },
-          message: JSON.stringify({ type: 'ice-candidate', from: data.from, data: data.candidate }),
-          timestamp: new Date().toISOString(),
-          isPrivate: false,
-          type: 'text'
-        });
-      });
+      console.log('WebRTC ICE candidate callbacks count:', this.webrtcIceCandidateCallbacks.length);
+      if (this.webrtcIceCandidateCallbacks.length > 0) {
+        this.webrtcIceCandidateCallbacks.forEach(callback => callback({ from: data.from, candidate: data.candidate }));
+      } else {
+        console.warn('[Socket] No WebRTC ICE listeners yet; queueing candidate');
+        this.pendingIceCandidates.push({ from: data.from, candidate: data.candidate });
+      }
     });
 
     this.socket.on('peer-joined', (data) => {
       console.log('WebRTC peer joined:', data);
-      // Forward to WebRTC manager
-      this.messageCallbacks.forEach(callback => {
-        callback({
-          id: Date.now().toString(),
-          user: { id: data.peerId, name: '', picture: '' },
-          message: JSON.stringify({ type: 'peer-joined', from: data.peerId }),
-          timestamp: new Date().toISOString(),
-          isPrivate: false,
-          type: 'text'
-        });
-      });
+      // Use dedicated WebRTC callbacks
+      this.webrtcPeerJoinedCallbacks.forEach(callback => callback({ peerId: data.peerId }));
     });
 
     this.socket.on('peer-left', (data) => {
       console.log('WebRTC peer left:', data);
-      // Forward to WebRTC manager
-      this.messageCallbacks.forEach(callback => {
-        callback({
-          id: Date.now().toString(),
-          user: { id: data.peerId, name: '', picture: '' },
-          message: JSON.stringify({ type: 'peer-left', from: data.peerId }),
-          timestamp: new Date().toISOString(),
-          isPrivate: false,
-          type: 'text'
-        });
-      });
+      // Use dedicated WebRTC callbacks
+      this.webrtcPeerLeftCallbacks.forEach(callback => callback({ peerId: data.peerId }));
     });
 
     this.socket.on('error', (data) => {
@@ -363,6 +344,60 @@ class SocketManager {
     this.errorCallbacks.push(callback);
   }
 
+  // WebRTC specific event listeners
+  onWebRTCOffer(callback: (data: { from: string; offer: any }) => void) {
+    console.log('[Socket] Registering WebRTC offer callback');
+    this.webrtcOfferCallbacks.push(callback);
+    console.log('[Socket] WebRTC offer callbacks count:', this.webrtcOfferCallbacks.length);
+    // Drain pending offers
+    if (this.pendingOffers.length) {
+      console.log(`[Socket] Replaying ${this.pendingOffers.length} pending offers`);
+      const queued = this.pendingOffers.slice();
+      this.pendingOffers = [];
+      queued.forEach(data => {
+        try { callback({ from: data.from, offer: data.offer }); } catch (e) { console.error('[Socket] Error delivering pending offer', e); }
+      });
+    }
+  }
+
+  onWebRTCAnswer(callback: (data: { from: string; answer: any }) => void) {
+    console.log('[Socket] Registering WebRTC answer callback');
+    this.webrtcAnswerCallbacks.push(callback);
+    console.log('[Socket] WebRTC answer callbacks count:', this.webrtcAnswerCallbacks.length);
+    // Drain pending answers
+    if (this.pendingAnswers.length) {
+      console.log(`[Socket] Replaying ${this.pendingAnswers.length} pending answers`);
+      const queued = this.pendingAnswers.slice();
+      this.pendingAnswers = [];
+      queued.forEach(data => {
+        try { callback({ from: data.from, answer: data.answer }); } catch (e) { console.error('[Socket] Error delivering pending answer', e); }
+      });
+    }
+  }
+
+  onWebRTCIceCandidate(callback: (data: { from: string; candidate: any }) => void) {
+    console.log('[Socket] Registering WebRTC ICE candidate callback');
+    this.webrtcIceCandidateCallbacks.push(callback);
+    console.log('[Socket] WebRTC ICE candidate callbacks count:', this.webrtcIceCandidateCallbacks.length);
+    // Drain pending candidates
+    if (this.pendingIceCandidates.length) {
+      console.log(`[Socket] Replaying ${this.pendingIceCandidates.length} pending ICE candidates`);
+      const queued = this.pendingIceCandidates.slice();
+      this.pendingIceCandidates = [];
+      queued.forEach(data => {
+        try { callback({ from: data.from, candidate: data.candidate }); } catch (e) { console.error('[Socket] Error delivering pending ICE candidate', e); }
+      });
+    }
+  }
+
+  onWebRTCPeerJoined(callback: (data: { peerId: string }) => void) {
+    this.webrtcPeerJoinedCallbacks.push(callback);
+  }
+
+  onWebRTCPeerLeft(callback: (data: { peerId: string }) => void) {
+    this.webrtcPeerLeftCallbacks.push(callback);
+  }
+
   // Remove event listeners
   offMessage(callback: (message: SocketMessage) => void) {
     this.messageCallbacks = this.messageCallbacks.filter(cb => cb !== callback);
@@ -386,6 +421,27 @@ class SocketManager {
 
   offError(callback: (error: string) => void) {
     this.errorCallbacks = this.errorCallbacks.filter(cb => cb !== callback);
+  }
+
+  // Remove WebRTC event listeners
+  offWebRTCOffer(callback: (data: { from: string; offer: any }) => void) {
+    this.webrtcOfferCallbacks = this.webrtcOfferCallbacks.filter(cb => cb !== callback);
+  }
+
+  offWebRTCAnswer(callback: (data: { from: string; answer: any }) => void) {
+    this.webrtcAnswerCallbacks = this.webrtcAnswerCallbacks.filter(cb => cb !== callback);
+  }
+
+  offWebRTCIceCandidate(callback: (data: { from: string; candidate: any }) => void) {
+    this.webrtcIceCandidateCallbacks = this.webrtcIceCandidateCallbacks.filter(cb => cb !== callback);
+  }
+
+  offWebRTCPeerJoined(callback: (data: { peerId: string }) => void) {
+    this.webrtcPeerJoinedCallbacks = this.webrtcPeerJoinedCallbacks.filter(cb => cb !== callback);
+  }
+
+  offWebRTCPeerLeft(callback: (data: { peerId: string }) => void) {
+    this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(cb => cb !== callback);
   }
 
   disconnect() {
