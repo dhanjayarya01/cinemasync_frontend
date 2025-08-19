@@ -622,7 +622,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             className="w-full h-full object-contain"
             autoPlay
             playsInline
-            muted
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setCurrentTime(videoRef.current.currentTime)

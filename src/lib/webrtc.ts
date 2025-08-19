@@ -278,9 +278,8 @@ class WebRTCManager {
         try {
           (this.videoElement as any).srcObject = event.streams[0];
           this.videoElement.autoplay = true;
-          // Keep muted to satisfy autoplay policies
-          this.videoElement.muted = true;
           (this.videoElement as any).playsInline = true;
+          // Do not force mute here; leave volume control to UI
           this.videoElement.play().catch(() => {});
         } catch (e) {
           console.error('[WebRTC] Error attaching remote stream to video element:', e);
@@ -669,7 +668,6 @@ class WebRTCManager {
     videoElement.src = videoUrl;
     // Help autoplay policies so captureStream produces frames
     try {
-      (videoElement as any).muted = true;
       (videoElement as any).playsInline = true;
     } catch {}
     
