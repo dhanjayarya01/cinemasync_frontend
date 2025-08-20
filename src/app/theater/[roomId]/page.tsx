@@ -94,6 +94,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // WebRTC connection status
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null)
   const [webrtcConnected, setWebrtcConnected] = useState(false)
+  const [showConnectedText, setShowConnectedText] = useState(false)
 
   // Monitor WebRTC connection status
   useEffect(() => {
@@ -112,6 +113,15 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
     return () => clearInterval(interval);
   }, [webrtcConnected]);
+
+  useEffect(() => {
+    if (!webrtcStatus) return
+    if (webrtcStatus.connectedPeers > 0) {
+      setShowConnectedText(true)
+      const t = setTimeout(() => setShowConnectedText(false), 1000)
+      return () => clearTimeout(t)
+    }
+  }, [webrtcStatus?.connectedPeers])
 
   useEffect(() => {
     const initializeRoom = async () => {
@@ -635,19 +645,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             className="w-full h-full object-contain"
             autoPlay
             playsInline
-            controls
-            onPlay={() => {
-              if (!isHost && !suppressLocalPlaybackRef.current && !isPlaying && videoRef.current) {
-                // Revert unauthorized local play; host controls playback
-                videoRef.current.pause()
-              }
-            }}
-            onPause={() => {
-              if (!isHost && !suppressLocalPlaybackRef.current && isPlaying && videoRef.current) {
-                // Revert unauthorized local pause; host controls playback
-                videoRef.current.play().catch(() => {})
-              }
-            }}
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setCurrentTime(videoRef.current.currentTime)
@@ -743,21 +740,14 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                     Host
                   </span>
                 )}
-                {/* WebRTC Status Indicator */}
-                {webrtcStatus && (
-                  <div className={`fixed top-4 right-4 z-50 px-3 py-2 rounded-lg text-sm font-medium ${
-                    webrtcStatus.connectedPeers > 0
-                      ? 'bg-green-500 text-white'
-                      : 'bg-yellow-500 text-black'
-                  }`}>
-                    P2P: {webrtcStatus.connectedPeers}/{webrtcStatus.totalPeers}
-                  </div>
-                )}
-
                 {/* WebRTC Connection Status */}
                 {webrtcStatus && (
-                  <div className={`fixed top-4 left-4 z-50 px-3 py-2 rounded-lg text-sm font-medium ${webrtcStatus.connectedPeers > 0 ? 'bg-green-500 text-white' : 'bg-yellow-500 text-black'}`}>
-                    {webrtcStatus.connectedPeers > 0 ? '✅ WebRTC Connected' : 'P2P connecting...'}
+                  <div className="fixed top-4 left-4 z-50">
+                    {showConnectedText ? (
+                      <div className="px-2 py-1 rounded bg-green-500 text-white text-xs">Connected</div>
+                    ) : (
+                      <div className={`w-3 h-3 rounded-full ${webrtcStatus.connectedPeers > 0 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                    )}
                   </div>
                 )}
 
@@ -833,8 +823,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             {/* Custom Video Controls */}
             {currentVideoType && (
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-                {/* Progress Bar */}
-                {currentVideoType === "file" && (
+                {/* Progress Bar - Only for host with file video */}
+                {isHost && currentVideoType === "file" && (
                   <div
                     ref={progressBarRef}
                     className="w-full h-2 bg-gray-700 rounded-full mb-4 cursor-pointer"
@@ -846,56 +836,72 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                     ></div>
                   </div>
                 )}
-
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    {/* Play/Pause Button */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={togglePlayPause}
-                      className="text-white hover:bg-white/20"
-                      disabled={currentVideoType === "screen"}
-                    >
-                      {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-                    </Button>
-
-                    {/* Volume Controls */}
-                    <div className="flex items-center space-x-2">
-                      <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
-                        {isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                
+                {isHost ? (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={togglePlayPause}
+                        className="text-white hover:bg-white/20"
+                        disabled={currentVideoType === "screen"}
+                      >
+                        {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
                       </Button>
-
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={volume}
-                        onChange={handleVolumeChange}
-                        className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
-                      />
-                    </div>
-
-                    {/* Time Display */}
-                    {currentVideoType === "file" && (
-                      <div className="text-white text-sm">
-                        {formatTime(currentTime)} / {formatTime(duration)}
+                      <div className="flex items-center space-x-2">
+                        <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
+                          {isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                        </Button>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={volume}
+                          onChange={handleVolumeChange}
+                          className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                        />
                       </div>
-                    )}
+                      {currentVideoType === "file" && (
+                        <div className="text-white text-sm">
+                          {formatTime(currentTime)} / {formatTime(duration)}
+                        </div>
+                      )}
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={toggleFullscreen} className="text-white hover:bg-white/20">
+                      {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+                    </Button>
                   </div>
-
-                  {/* Fullscreen Button */}
-                  <Button variant="ghost" size="sm" onClick={toggleFullscreen} className="text-white hover:bg-white/20">
-                    {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
-                  </Button>
-                </div>
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <div className="flex items-center space-x-2">
+                        <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
+                          {isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                        </Button>
+                        <input
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={volume}
+                          onChange={handleVolumeChange}
+                          className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                        />
+                      </div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={toggleFullscreen} className="text-white hover:bg-white/20">
+                      {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Chat Toggle Button in Fullscreen with unread badge */}
+            {/* Chat Toggle Button in Fullscreen with unread badge - for both host and non-host */}
             {isFullscreen && (
-              <div className="absolute top-4 right-4">
+              <div className="absolute top-4 right-4 z-20">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -976,7 +982,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           )}
         </div>
 
-        {/* Right Side - Chat */}
+        {/* Right Side - Chat - Always visible, but can be hidden in fullscreen */}
         {(!isFullscreen || (isFullscreen && isChatVisible)) && (
           <div
             className={`${
