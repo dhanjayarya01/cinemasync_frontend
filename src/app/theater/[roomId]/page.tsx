@@ -638,13 +638,27 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               // eslint-disable-next-line @typescript-eslint/ban-ts-comment
               // @ts-ignore
               videoRef.current = el
-              if (el && !isHost) {
-                webrtcManager.setVideoElement(el)
-              }
+                           if (el && !isHost) {
+               webrtcManager.setVideoElement(el)
+             }
             }}
             className="w-full h-full object-contain"
             autoPlay
             playsInline
+                       preload="auto"
+           onLoadedMetadata={() => {
+              try {
+                videoRef.current?.play()
+                setIsPlaying(true)
+              } catch {}
+            }}
+            onCanPlay={() => {
+              if (videoRef.current && videoRef.current.paused) {
+                videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {})
+              }
+            }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setCurrentTime(videoRef.current.currentTime)
@@ -821,7 +835,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             </div>
 
             {/* Custom Video Controls */}
-            {currentVideoType && (
+            {(currentVideoType || !isHost) && (
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
                 {/* Progress Bar - Only for host with file video */}
                 {isHost && currentVideoType === "file" && (
