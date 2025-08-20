@@ -58,11 +58,14 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [duration, setDuration] = useState(0)
   const [volume, setVolume] = useState(1)
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const suppressLocalPlaybackRef = useRef(false)
 
   // Chat states
   const [message, setMessage] = useState("")
   const [activeTab, setActiveTab] = useState<"group" | "private">("group")
   const [isChatVisible, setIsChatVisible] = useState(true)
+  const [unreadCount, setUnreadCount] = useState(0)
+  const [joinNotice, setJoinNotice] = useState<string | null>(null)
 
   // Video call states
   const [isMicMuted, setIsMicMuted] = useState(false)
@@ -183,12 +186,16 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             if (parsed.type === 'user-joined' && parsed.user && parsed.user.id !== userData.id) {
               const peerId = parsed.user.id;
               console.log(`[Theater] New user joined: ${peerId}, isHost: ${webrtcManager.isHostUser()}`);
-              
+              // Show transient notice instead of dumping JSON to chat
+              setJoinNotice(`${parsed.user.name} joined`)
+              setTimeout(() => setJoinNotice(null), 3000)
               // If we're the host, send offer to the new user
               if (webrtcManager.isHostUser()) {
                 console.log(`[Theater] Host sending offer to new user ${peerId}`);
                 webrtcManager.createOffer(peerId);
               }
+              // Do not push the JSON join message into chat history
+              return;
             }
           } catch (e) {
             // Not a JSON message, continue with normal message handling
@@ -197,6 +204,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             // Check if message already exists to prevent duplicates
             const exists = prev.some(m => m.id === message.id)
             if (exists) return prev
+            if (!isChatVisible) setUnreadCount(c => c + 1)
             return [...prev, message]
           })
         })
@@ -285,12 +293,17 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (!isHost && videoRef.current) {
       switch (data.type) {
         case 'play':
+          suppressLocalPlaybackRef.current = true
           videoRef.current.currentTime = data.currentTime || 0
-          videoRef.current.play()
+          videoRef.current.play().finally(() => {
+            suppressLocalPlaybackRef.current = false
+          })
           setIsPlaying(true)
           break
         case 'pause':
+          suppressLocalPlaybackRef.current = true
           videoRef.current.pause()
+          suppressLocalPlaybackRef.current = false
           setIsPlaying(false)
           break
         case 'seek':
@@ -604,7 +617,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       )
     }
 
-    // For non-host, always render a receiver element to accept MSE stream even if no file is selected locally
+    // For non-host, always render a receiver element and expose native controls
     if (!isHost) {
       return (
         <div className="w-full h-full">
@@ -622,6 +635,19 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             className="w-full h-full object-contain"
             autoPlay
             playsInline
+            controls
+            onPlay={() => {
+              if (!isHost && !suppressLocalPlaybackRef.current && !isPlaying && videoRef.current) {
+                // Revert unauthorized local play; host controls playback
+                videoRef.current.pause()
+              }
+            }}
+            onPause={() => {
+              if (!isHost && !suppressLocalPlaybackRef.current && isPlaying && videoRef.current) {
+                // Revert unauthorized local pause; host controls playback
+                videoRef.current.play().catch(() => {})
+              }
+            }}
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setCurrentTime(videoRef.current.currentTime)
@@ -692,6 +718,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   return (
     <div className="min-h-screen bg-black overflow-auto">
+      {joinNotice && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-4 py-2 rounded shadow">
+          {joinNotice}
+        </div>
+      )}
       {/* Header */}
       {!isFullscreen && (
         <>
@@ -724,67 +755,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 )}
 
                 {/* WebRTC Connection Status */}
-                {webrtcConnected && (
-                  <div className="fixed top-4 left-4 z-50 px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-medium">
-                    ✅ WebRTC Connected
+                {webrtcStatus && (
+                  <div className={`fixed top-4 left-4 z-50 px-3 py-2 rounded-lg text-sm font-medium ${webrtcStatus.connectedPeers > 0 ? 'bg-green-500 text-white' : 'bg-yellow-500 text-black'}`}>
+                    {webrtcStatus.connectedPeers > 0 ? '✅ WebRTC Connected' : 'P2P connecting...'}
                   </div>
                 )}
 
-                {/* WebRTC Test Button */}
-                <button
-                  onClick={() => {
-                    console.log('[Theater] Testing WebRTC connection...');
-                    webrtcManager.testConnection();
-                  }}
-                  className="fixed top-16 right-4 z-50 px-3 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600"
-                >
-                  Test WebRTC
-                </button>
-
-                {/* WebRTC Signaling Test Button */}
-                <button
-                  onClick={() => {
-                    console.log('[Theater] Testing WebRTC signaling...');
-                    webrtcManager.testSignaling();
-                  }}
-                  className="fixed top-32 right-4 z-50 px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-medium hover:bg-green-600"
-                >
-                  Test Signaling
-                </button>
-
-                {/* Simple Message Test Button */}
-                <button
-                  onClick={() => {
-                    console.log('[Theater] Sending test message...');
-                    socketManager.sendMessage('Test message from ' + (webrtcManager.isHostUser() ? 'host' : 'non-host'));
-                  }}
-                  className="fixed top-48 right-4 z-50 px-3 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600"
-                >
-                  Send Test Message
-                </button>
-
-                {/* Manual WebRTC Test Button */}
-                <button
-                  onClick={async () => {
-                    console.log('[Theater] Manual WebRTC test...');
-                    console.log('[Theater] Socket connected:', socketManager.isSocketConnected());
-                    console.log('[Theater] User:', user);
-                    console.log('[Theater] Participants:', participants);
-                    console.log('[Theater] Is host:', webrtcManager.isHostUser());
-                    
-                    // Get the other user's ID from participants
-                    const otherUser = participants.find(p => p.user.id !== user?.id);
-                    if (otherUser) {
-                      console.log(`[Theater] Testing connection with ${otherUser.user.id}`);
-                      await webrtcManager.testCreateConnection(otherUser.user.id);
-                    } else {
-                      console.log('[Theater] No other user found');
-                    }
-                  }}
-                  className="fixed top-64 right-4 z-50 px-3 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-600"
-                >
-                  Manual WebRTC Test
-                </button>
+                {/* Removed test buttons for production */}
                 <Button
                   variant="outline"
                   size="sm"
@@ -916,16 +893,21 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               </div>
             )}
 
-            {/* Chat Toggle Button in Fullscreen */}
+            {/* Chat Toggle Button in Fullscreen with unread badge */}
             {isFullscreen && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsChatVisible(!isChatVisible)}
-                className="absolute top-4 right-4 text-white bg-black/50 hover:bg-black/70"
-              >
-                {isChatVisible ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
-              </Button>
+              <div className="absolute top-4 right-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => { setIsChatVisible(!isChatVisible); if (!isChatVisible) setUnreadCount(0); }}
+                  className="relative text-white bg-black/50 hover:bg-black/70"
+                >
+                  {isChatVisible ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+                  {!isChatVisible && unreadCount > 0 && (
+                    <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] rounded-full px-1">{unreadCount}</span>
+                  )}
+                </Button>
+              </div>
             )}
           </div>
 
