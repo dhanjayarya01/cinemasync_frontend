@@ -107,13 +107,16 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const fileInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
 
-  // Check if user is host
+  // Host detection
   const isHost = user?.id === roomInfo?.host?.id
 
   // WebRTC connection status
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null)
   const [webrtcConnected, setWebrtcConnected] = useState(false)
   const [showConnectedText, setShowConnectedText] = useState(false)
+
+  // Ensure we only start host streaming once per selected file
+  const hasStartedStreamingRef = useRef(false)
 
   // Monitor WebRTC connection status
   useEffect(() => {
@@ -490,9 +493,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     fileInputRef.current?.click()
   }
 
+  // ---- FIXED handleFileSelect: set selected file and let effect start streaming when host videoRef is ready ----
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     console.log('[Theater] File input changed:', file)
+    if (!file) return
+
     if (file && file.type.startsWith("video/")) {
       setIsLoadingVideo(true)
       setSelectedVideoFile(file)
@@ -500,6 +506,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setIsPlaying(true)
       setIsLoadingVideo(false)
       setYoutubeVideoId(null)
+      // Reset streaming flag so effect will attempt to start for this new file
+      hasStartedStreamingRef.current = false
+
       // Broadcast metadata so receivers prepare their video element
       socketManager.sendVideoMetadata({
         name: file.name,
@@ -512,17 +521,36 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   }
 
-  // Handle video file streaming for host (avoid duplicate starts)
-  const hasStartedStreamingRef = useRef(false)
+  // Ensure host streaming starts as soon as the host's <video> element is mounted and ready
   useEffect(() => {
-    if (!webrtcManager.isHostUser()) return
-    if (!selectedVideoFile) return
-    if (!videoRef.current) return
-    if (hasStartedStreamingRef.current) return
-    hasStartedStreamingRef.current = true
-    console.log('[Theater] Host is about to stream video file (from useEffect):', selectedVideoFile.name)
-    webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
-  }, [selectedVideoFile])
+    const tryStartHostFileStream = async () => {
+      // Only host should start streaming
+      if (!webrtcManager.isHostUser()) return
+      if (!selectedVideoFile) return
+      if (!videoRef.current) return
+      if (hasStartedStreamingRef.current) return
+
+      try {
+        console.log('[Theater] Host starting file stream (effect):', selectedVideoFile.name)
+        hasStartedStreamingRef.current = true
+        await webrtcManager.streamVideoFile(selectedVideoFile, videoRef.current)
+        // streamVideoFile will handle captureStream fallback internally
+      } catch (e) {
+        console.error('[Theater] Error while starting host file stream (effect):', e)
+        // Reset flag to allow retries
+        hasStartedStreamingRef.current = false
+      }
+    }
+
+    // Try immediately and also schedule a couple of retries to handle mount timing edge-cases.
+    tryStartHostFileStream()
+    const retry1 = setTimeout(tryStartHostFileStream, 300)
+    const retry2 = setTimeout(tryStartHostFileStream, 800)
+    return () => {
+      clearTimeout(retry1)
+      clearTimeout(retry2)
+    }
+  }, [selectedVideoFile, isHost])
 
   // Bind receiver video element early for non-hosts
   useEffect(() => {

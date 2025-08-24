@@ -1,3 +1,4 @@
+// lib/socket.ts
 import { io, Socket } from 'socket.io-client';
 import { getToken } from './auth';
 
@@ -73,26 +74,33 @@ class SocketManager {
   private socket: Socket | null = null;
   private isConnected = false;
   private roomId: string | null = null;
+
   private messageCallbacks: ((message: SocketMessage) => void)[] = [];
   private participantCallbacks: ((participants: Participant[]) => void)[] = [];
   private videoControlCallbacks: ((data: any) => void)[] = [];
   private videoMetadataCallbacks: ((metadata: VideoMetadata) => void)[] = [];
   private roomInfoCallbacks: ((room: RoomInfo) => void)[] = [];
   private errorCallbacks: ((error: string) => void)[] = [];
-  // Add WebRTC specific callbacks
+
+  // WebRTC specific callbacks
   private webrtcOfferCallbacks: ((data: { from: string; offer: any }) => void)[] = [];
   private webrtcAnswerCallbacks: ((data: { from: string; answer: any }) => void)[] = [];
   private webrtcIceCandidateCallbacks: ((data: { from: string; candidate: any }) => void)[] = [];
   private webrtcPeerJoinedCallbacks: ((data: { peerId: string }) => void)[] = [];
   private webrtcPeerLeftCallbacks: ((data: { peerId: string }) => void)[] = [];
+
   // Video state sync callbacks
   private videoStateSyncCallbacks: ((data: any) => void)[] = [];
-  // Host video state request callbacks
   private hostVideoStateRequestCallbacks: (() => void)[] = [];
+
   // Pending signaling events if callbacks are not yet registered
   private pendingOffers: { from: string; offer: any }[] = [];
   private pendingAnswers: { from: string; answer: any }[] = [];
   private pendingIceCandidates: { from: string; candidate: any }[] = [];
+
+  // New hooks
+  private connectCallbacks: (() => void)[] = [];
+  private authenticatedCallbacks: ((data: any) => void)[] = [];
 
   connect() {
     if (this.socket) return;
@@ -106,6 +114,10 @@ class SocketManager {
       console.log('Socket connected');
       this.isConnected = true;
       this.authenticate();
+      // notify listeners that raw socket is connected
+      this.connectCallbacks.forEach(cb => {
+        try { cb(); } catch (e) { console.error('connect callback error', e); }
+      });
     });
 
     this.socket.on('disconnect', () => {
@@ -119,6 +131,10 @@ class SocketManager {
 
     this.socket.on('authenticated', (data) => {
       console.log('Socket authenticated:', data);
+      // notify authenticated listeners
+      this.authenticatedCallbacks.forEach(cb => {
+        try { cb(data); } catch (e) { console.error('authenticated callback error', e); }
+      });
     });
 
     this.socket.on('auth-error', (data) => {
@@ -134,7 +150,7 @@ class SocketManager {
     this.socket.on('user-joined', (data) => {
       console.log('User joined:', data);
       this.participantCallbacks.forEach(callback => callback(data.participants));
-      // Forward to message callbacks for WebRTC host offer retry logic
+      // convert to chat-like message for other systems
       this.messageCallbacks.forEach(callback => {
         callback({
           id: Date.now().toString(),
@@ -154,7 +170,6 @@ class SocketManager {
 
     this.socket.on('chat-message', (message: SocketMessage) => {
       console.log('Chat message received:', message);
-      // Ensure message has proper ID and timestamp
       const processedMessage: SocketMessage = {
         ...message,
         id: message.id || `chat-${Date.now()}-${Math.random()}`,
@@ -195,7 +210,6 @@ class SocketManager {
 
     this.socket.on('voice-message', (data) => {
       console.log('Voice message received:', data);
-      // Create a proper SocketMessage object for voice messages
       const voiceMessage: SocketMessage = {
         id: `voice-${Date.now()}-${Math.random()}`,
         user: data.message?.user || { id: 'unknown', name: 'Unknown', picture: '' },
@@ -206,17 +220,12 @@ class SocketManager {
         audioUrl: data.message?.audioUrl,
         duration: data.message?.duration || 0
       };
-      
-      console.log('Processed voice message:', voiceMessage);
-      // Send to message callbacks
       this.messageCallbacks.forEach(callback => callback(voiceMessage));
     });
 
     // WebRTC signaling events
     this.socket.on('offer', (data) => {
       console.log('WebRTC offer received:', data);
-      console.log('WebRTC offer callbacks count:', this.webrtcOfferCallbacks.length);
-      // Use dedicated WebRTC callbacks, or queue if none yet
       if (this.webrtcOfferCallbacks.length > 0) {
         this.webrtcOfferCallbacks.forEach(callback => callback({ from: data.from, offer: data.offer }));
       } else {
@@ -227,7 +236,6 @@ class SocketManager {
 
     this.socket.on('answer', (data) => {
       console.log('WebRTC answer received:', data);
-      console.log('WebRTC answer callbacks count:', this.webrtcAnswerCallbacks.length);
       if (this.webrtcAnswerCallbacks.length > 0) {
         this.webrtcAnswerCallbacks.forEach(callback => callback({ from: data.from, answer: data.answer }));
       } else {
@@ -238,7 +246,6 @@ class SocketManager {
 
     this.socket.on('ice-candidate', (data) => {
       console.log('WebRTC ICE candidate received:', data);
-      console.log('WebRTC ICE candidate callbacks count:', this.webrtcIceCandidateCallbacks.length);
       if (this.webrtcIceCandidateCallbacks.length > 0) {
         this.webrtcIceCandidateCallbacks.forEach(callback => callback({ from: data.from, candidate: data.candidate }));
       } else {
@@ -249,13 +256,11 @@ class SocketManager {
 
     this.socket.on('peer-joined', (data) => {
       console.log('WebRTC peer joined:', data);
-      // Use dedicated WebRTC callbacks
       this.webrtcPeerJoinedCallbacks.forEach(callback => callback({ peerId: data.peerId }));
     });
 
     this.socket.on('peer-left', (data) => {
       console.log('WebRTC peer left:', data);
-      // Use dedicated WebRTC callbacks
       this.webrtcPeerLeftCallbacks.forEach(callback => callback({ peerId: data.peerId }));
     });
 
@@ -389,10 +394,8 @@ class SocketManager {
   onWebRTCOffer(callback: (data: { from: string; offer: any }) => void) {
     console.log('[Socket] Registering WebRTC offer callback');
     this.webrtcOfferCallbacks.push(callback);
-    console.log('[Socket] WebRTC offer callbacks count:', this.webrtcOfferCallbacks.length);
     // Drain pending offers
     if (this.pendingOffers.length) {
-      console.log(`[Socket] Replaying ${this.pendingOffers.length} pending offers`);
       const queued = this.pendingOffers.slice();
       this.pendingOffers = [];
       queued.forEach(data => {
@@ -404,10 +407,7 @@ class SocketManager {
   onWebRTCAnswer(callback: (data: { from: string; answer: any }) => void) {
     console.log('[Socket] Registering WebRTC answer callback');
     this.webrtcAnswerCallbacks.push(callback);
-    console.log('[Socket] WebRTC answer callbacks count:', this.webrtcAnswerCallbacks.length);
-    // Drain pending answers
     if (this.pendingAnswers.length) {
-      console.log(`[Socket] Replaying ${this.pendingAnswers.length} pending answers`);
       const queued = this.pendingAnswers.slice();
       this.pendingAnswers = [];
       queued.forEach(data => {
@@ -419,10 +419,7 @@ class SocketManager {
   onWebRTCIceCandidate(callback: (data: { from: string; candidate: any }) => void) {
     console.log('[Socket] Registering WebRTC ICE candidate callback');
     this.webrtcIceCandidateCallbacks.push(callback);
-    console.log('[Socket] WebRTC ICE candidate callbacks count:', this.webrtcIceCandidateCallbacks.length);
-    // Drain pending candidates
     if (this.pendingIceCandidates.length) {
-      console.log(`[Socket] Replaying ${this.pendingIceCandidates.length} pending ICE candidates`);
       const queued = this.pendingIceCandidates.slice();
       this.pendingIceCandidates = [];
       queued.forEach(data => {
@@ -490,7 +487,6 @@ class SocketManager {
     if (!this.socket || !this.roomId) return;
 
     try {
-      // Convert blob to base64 for sending through socket
       const arrayBuffer = await audioBlob.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
       let binaryString = '';
@@ -498,8 +494,7 @@ class SocketManager {
         binaryString += String.fromCharCode(uint8Array[i]);
       }
       const base64Audio = btoa(binaryString);
-      
-      // Create voice message object
+
       const voiceMessage = {
         type: 'voice',
         audioUrl: `data:audio/webm;base64,${base64Audio}`,
@@ -511,7 +506,6 @@ class SocketManager {
 
       console.log('Sending voice message:', { duration, user: user.name, audioSize: base64Audio.length });
 
-      // Send through socket with acknowledgment
       return new Promise((resolve, reject) => {
         this.socket!.emit('voice-message', {
           roomId: this.roomId,
@@ -525,8 +519,7 @@ class SocketManager {
             reject(new Error('Voice message send failed'));
           }
         });
-        
-        // Fallback: resolve after a short delay if no ack received
+
         setTimeout(() => {
           console.log('Voice message sent (fallback)');
           resolve({ success: true });
@@ -563,17 +556,11 @@ class SocketManager {
   }
 
   onHostVideoStateRequest(callback: () => void) {
-    // Add to existing callbacks or create new array
-    if (!this.hostVideoStateRequestCallbacks) {
-      this.hostVideoStateRequestCallbacks = [];
-    }
     this.hostVideoStateRequestCallbacks.push(callback);
   }
 
   offHostVideoStateRequest(callback: () => void) {
-    if (this.hostVideoStateRequestCallbacks) {
-      this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(cb => cb !== callback);
-    }
+    this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(cb => cb !== callback);
   }
 
   disconnect() {
@@ -588,6 +575,19 @@ class SocketManager {
   isSocketConnected() {
     return this.isConnected;
   }
+
+  // New: onConnect / onAuthenticated hooks
+  onConnect(callback: () => void) {
+    this.connectCallbacks.push(callback);
+  }
+
+  onAuthenticated(callback: (data: any) => void) {
+    this.authenticatedCallbacks.push(callback);
+  }
+
+  offAuthenticated(callback: (data: any) => void) {
+    this.authenticatedCallbacks = this.authenticatedCallbacks.filter(cb => cb !== callback);
+  }
 }
 
-export const socketManager = new SocketManager(); 
+export const socketManager = new SocketManager();
