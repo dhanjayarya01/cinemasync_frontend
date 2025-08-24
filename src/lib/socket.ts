@@ -15,6 +15,8 @@ export interface SocketMessage {
   isPrivate: boolean;
   type: 'text' | 'voice';
   audioUrl?: string;
+  duration?: number;
+  failed?: boolean;
 }
 
 export interface Participant {
@@ -83,6 +85,10 @@ class SocketManager {
   private webrtcIceCandidateCallbacks: ((data: { from: string; candidate: any }) => void)[] = [];
   private webrtcPeerJoinedCallbacks: ((data: { peerId: string }) => void)[] = [];
   private webrtcPeerLeftCallbacks: ((data: { peerId: string }) => void)[] = [];
+  // Video state sync callbacks
+  private videoStateSyncCallbacks: ((data: any) => void)[] = [];
+  // Host video state request callbacks
+  private hostVideoStateRequestCallbacks: (() => void)[] = [];
   // Pending signaling events if callbacks are not yet registered
   private pendingOffers: { from: string; offer: any }[] = [];
   private pendingAnswers: { from: string; answer: any }[] = [];
@@ -148,7 +154,13 @@ class SocketManager {
 
     this.socket.on('chat-message', (message: SocketMessage) => {
       console.log('Chat message received:', message);
-      this.messageCallbacks.forEach(callback => callback(message));
+      // Ensure message has proper ID and timestamp
+      const processedMessage: SocketMessage = {
+        ...message,
+        id: message.id || `chat-${Date.now()}-${Math.random()}`,
+        timestamp: message.timestamp || new Date().toLocaleTimeString()
+      };
+      this.messageCallbacks.forEach(callback => callback(processedMessage));
     });
 
     this.socket.on('video-play', (data) => {
@@ -169,6 +181,35 @@ class SocketManager {
     this.socket.on('video-metadata', (metadata: VideoMetadata) => {
       console.log('Video metadata received:', metadata);
       this.videoMetadataCallbacks.forEach(callback => callback(metadata));
+    });
+
+    this.socket.on('video-state-sync', (data) => {
+      console.log('Video state sync received:', data);
+      this.videoStateSyncCallbacks.forEach(callback => callback(data));
+    });
+
+    this.socket.on('host-video-state-request', (data) => {
+      console.log('Host video state request received:', data);
+      this.hostVideoStateRequestCallbacks.forEach(callback => callback());
+    });
+
+    this.socket.on('voice-message', (data) => {
+      console.log('Voice message received:', data);
+      // Create a proper SocketMessage object for voice messages
+      const voiceMessage: SocketMessage = {
+        id: `voice-${Date.now()}-${Math.random()}`,
+        user: data.message?.user || { id: 'unknown', name: 'Unknown', picture: '' },
+        message: 'Voice Message',
+        timestamp: data.message?.timestamp || new Date().toLocaleTimeString(),
+        isPrivate: data.message?.isPrivate || false,
+        type: 'voice',
+        audioUrl: data.message?.audioUrl,
+        duration: data.message?.duration || 0
+      };
+      
+      console.log('Processed voice message:', voiceMessage);
+      // Send to message callbacks
+      this.messageCallbacks.forEach(callback => callback(voiceMessage));
     });
 
     // WebRTC signaling events
@@ -442,6 +483,97 @@ class SocketManager {
 
   offWebRTCPeerLeft(callback: (data: { peerId: string }) => void) {
     this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(cb => cb !== callback);
+  }
+
+  // Voice message methods
+  async sendVoiceMessage(audioBlob: Blob, duration: number, isPrivate: boolean, user: any) {
+    if (!this.socket || !this.roomId) return;
+
+    try {
+      // Convert blob to base64 for sending through socket
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      let binaryString = '';
+      for (let i = 0; i < uint8Array.length; i++) {
+        binaryString += String.fromCharCode(uint8Array[i]);
+      }
+      const base64Audio = btoa(binaryString);
+      
+      // Create voice message object
+      const voiceMessage = {
+        type: 'voice',
+        audioUrl: `data:audio/webm;base64,${base64Audio}`,
+        duration: duration,
+        isPrivate: isPrivate,
+        timestamp: new Date().toLocaleTimeString(),
+        user: user
+      };
+
+      console.log('Sending voice message:', { duration, user: user.name, audioSize: base64Audio.length });
+
+      // Send through socket with acknowledgment
+      return new Promise((resolve, reject) => {
+        this.socket!.emit('voice-message', {
+          roomId: this.roomId,
+          message: voiceMessage
+        }, (ack: any) => {
+          if (ack && ack.success) {
+            console.log('Voice message sent successfully');
+            resolve(ack);
+          } else {
+            console.error('Voice message send failed:', ack);
+            reject(new Error('Voice message send failed'));
+          }
+        });
+        
+        // Fallback: resolve after a short delay if no ack received
+        setTimeout(() => {
+          console.log('Voice message sent (fallback)');
+          resolve({ success: true });
+        }, 1000);
+      });
+    } catch (error) {
+      console.error('Error sending voice message:', error);
+      throw error;
+    }
+  }
+
+  // Video state sync methods
+  sendVideoStateRequest() {
+    if (!this.socket || !this.roomId) return;
+    console.log('Sending video state request');
+    this.socket.emit('video-state-request', { roomId: this.roomId });
+  }
+
+  sendVideoStateSync(videoState: any) {
+    if (!this.socket || !this.roomId) return;
+    console.log('Sending video state sync:', videoState);
+    this.socket.emit('video-state-sync', { 
+      roomId: this.roomId, 
+      videoState 
+    });
+  }
+
+  onVideoStateSync(callback: (data: any) => void) {
+    this.videoStateSyncCallbacks.push(callback);
+  }
+
+  offVideoStateSync(callback: (data: any) => void) {
+    this.videoStateSyncCallbacks = this.videoStateSyncCallbacks.filter(cb => cb !== callback);
+  }
+
+  onHostVideoStateRequest(callback: () => void) {
+    // Add to existing callbacks or create new array
+    if (!this.hostVideoStateRequestCallbacks) {
+      this.hostVideoStateRequestCallbacks = [];
+    }
+    this.hostVideoStateRequestCallbacks.push(callback);
+  }
+
+  offHostVideoStateRequest(callback: () => void) {
+    if (this.hostVideoStateRequestCallbacks) {
+      this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(cb => cb !== callback);
+    }
   }
 
   disconnect() {

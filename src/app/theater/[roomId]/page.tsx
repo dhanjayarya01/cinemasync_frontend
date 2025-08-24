@@ -33,6 +33,7 @@ import {
   Crown,
   AlertCircle,
   CheckCircle,
+  X,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -62,10 +63,28 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   // Chat states
   const [message, setMessage] = useState("")
-  const [activeTab, setActiveTab] = useState<"group" | "private">("group")
   const [isChatVisible, setIsChatVisible] = useState(true)
   const [unreadCount, setUnreadCount] = useState(0)
   const [joinNotice, setJoinNotice] = useState<string | null>(null)
+  
+  // Voice message states
+  const [isRecording, setIsRecording] = useState(false)
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false)
+  const [recordingTime, setRecordingTime] = useState(0)
+  const [playingVoiceMessages, setPlayingVoiceMessages] = useState<Set<string>>(new Set())
+  const [voiceMessageProgress, setVoiceMessageProgress] = useState<Map<string, number>>(new Map())
+  const [voiceMessageCurrentTime, setVoiceMessageCurrentTime] = useState<Map<string, number>>(new Map())
+  const [isSendingVoiceMessage, setIsSendingVoiceMessage] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map())
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+
+  // Video state persistence and autoplay handling
+  const [videoMetadata, setVideoMetadata] = useState<any>(null)
+  const [videoPlaybackState, setVideoPlaybackState] = useState<any>(null)
+  const [showResumeOverlay, setShowResumeOverlay] = useState(false)
 
   // Video call states
   const [isMicMuted, setIsMicMuted] = useState(false)
@@ -190,6 +209,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onMessage((message) => {
           console.log('Message received:', message)
+          
           // Handle WebRTC signaling for user joins
           try {
             const parsed = JSON.parse(message.message);
@@ -210,10 +230,46 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           } catch (e) {
             // Not a JSON message, continue with normal message handling
           }
+          
+          // Handle voice messages
+          if (message.type === 'voice' && message.audioUrl) {
+            console.log('Processing voice message:', message)
+            setMessages(prev => {
+              // Check if this voice message already exists
+              const exists = prev.some(m => 
+                m.type === 'voice' && 
+                m.user.id === message.user.id && 
+                m.duration === message.duration &&
+                Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp).getTime()) < 5000
+              )
+              
+              if (exists) {
+                console.log('Voice message already exists, skipping')
+                return prev
+              }
+              
+              if (!isChatVisible) setUnreadCount(c => c + 1)
+              return [...prev, message]
+            })
+            return
+          }
+          
+          // Handle regular text messages
           setMessages(prev => {
             // Check if message already exists to prevent duplicates
-            const exists = prev.some(m => m.id === message.id)
-            if (exists) return prev
+            const exists = prev.some(m => 
+              m.id === message.id || 
+              (m.type === 'text' && 
+               m.message === message.message && 
+               m.user.id === message.user.id &&
+               Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp).getTime()) < 2000)
+            )
+            
+            if (exists) {
+              console.log('Message already exists, skipping')
+              return prev
+            }
+            
             if (!isChatVisible) setUnreadCount(c => c + 1)
             return [...prev, message]
           })
@@ -227,6 +283,31 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         socketManager.onVideoMetadata((metadata) => {
           console.log('Video metadata received:', metadata)
           handleVideoMetadata(metadata)
+          
+          // If we're not the host and receive new metadata, request the full video state
+          if (!isHost) {
+            console.log('[Theater] Non-host received new video metadata, requesting full state')
+            setTimeout(() => {
+              socketManager.sendVideoStateRequest()
+            }, 500) // Small delay to ensure host has processed the metadata
+          }
+        })
+
+        // Listen for host video state requests
+        socketManager.onHostVideoStateRequest(() => {
+          if (isHost && videoMetadata) {
+            console.log('[Theater] Host received video state request, sending current state')
+            const videoState = {
+              metadata: videoMetadata,
+              playbackState: {
+                currentTime: videoRef.current?.currentTime || 0,
+                isPlaying: isPlaying,
+                volume: volume,
+                isMuted: isMuted
+              }
+            }
+            socketManager.sendVideoStateSync(videoState)
+          }
         })
 
         socketManager.onError((error) => {
@@ -506,8 +587,271 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // Chat functions
   const handleSendMessage = () => {
     if (message.trim()) {
-      socketManager.sendMessage(message, activeTab === "private")
+      const messageText = message.trim()
+      const messageId = `msg-${Date.now()}-${Math.random()}`
+      
+      // Add message to local chat immediately
+      const newMessage: SocketMessage = {
+        id: messageId,
+        message: messageText,
+        user: {
+          id: user?.id || '',
+          name: user?.name || 'You',
+          picture: user?.picture || ''
+        },
+        timestamp: new Date().toLocaleTimeString(),
+        isPrivate: false,
+        type: 'text'
+      }
+      setMessages(prev => [...prev, newMessage])
+      
+      // Clear input immediately
       setMessage("")
+      
+      // Send via socket
+      socketManager.sendMessage(messageText, false)
+    }
+  }
+
+  // Voice message functions
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = mediaRecorder
+      
+      const chunks: Blob[] = []
+      mediaRecorder.ondataavailable = (e) => chunks.push(e.data)
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' })
+        setAudioBlob(blob)
+        stream.getTracks().forEach(track => track.stop())
+      }
+      
+      mediaRecorder.start()
+      setIsRecording(true)
+      setRecordingTime(0)
+      
+      // Start timer
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1)
+      }, 100)
+      
+    } catch (error) {
+      console.error('Error starting recording:', error)
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+      
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current)
+      }
+    }
+  }
+
+  // Voice message functions
+  const handleSendVoiceMessage = async () => {
+    if (audioBlob) {
+      setIsSendingVoiceMessage(true)
+      
+      // Add timeout to prevent stuck sending state
+      const timeoutId = setTimeout(() => {
+        setIsSendingVoiceMessage(false)
+        console.error('Voice message sending timeout')
+      }, 10000) // 10 second timeout
+      
+      try {
+        // Add voice message to local chat immediately
+        const voiceMessageId = `voice-${Date.now()}-${Math.random()}`
+        const localVoiceMessage: SocketMessage = {
+          id: voiceMessageId,
+          user: {
+            id: user?.id || '',
+            name: user?.name || 'You',
+            picture: user?.picture || ''
+          },
+          message: 'Voice Message',
+          timestamp: new Date().toLocaleTimeString(),
+          isPrivate: false,
+          type: 'voice',
+          audioUrl: URL.createObjectURL(audioBlob), // Use blob URL for local playback
+          duration: recordingTime
+        }
+        
+        setMessages(prev => [...prev, localVoiceMessage])
+        
+        // Send via socket with better error handling
+        try {
+          await socketManager.sendVoiceMessage(audioBlob, recordingTime, false, {
+            id: user?.id || '',
+            name: user?.name || 'You',
+            picture: user?.picture || ''
+          })
+          
+          console.log('Voice message sent successfully')
+          setAudioBlob(null)
+          setRecordingTime(0)
+          clearTimeout(timeoutId)
+        } catch (sendError) {
+          console.error('Socket send error:', sendError)
+          // Keep the local message but mark it as failed
+          setMessages(prev => prev.map(msg => 
+            msg.id === voiceMessageId 
+              ? { ...msg, failed: true }
+              : msg
+          ))
+          throw sendError
+        }
+      } catch (error) {
+        console.error('Error sending voice message:', error)
+        clearTimeout(timeoutId)
+        // Don't remove the message, just mark it as failed
+      } finally {
+        setIsSendingVoiceMessage(false)
+      }
+    }
+  }
+
+  // Voice message playback functions
+  const playVoiceMessage = (messageId: string, audioUrl: string) => {
+    const audio = new Audio(audioUrl)
+    audioRefs.current.set(messageId, audio)
+    
+    audio.addEventListener('timeupdate', () => {
+      if (audio.duration) {
+        const progress = (audio.currentTime / audio.duration) * 100
+        const currentTime = audio.currentTime
+        setVoiceMessageProgress(prev => new Map(prev).set(messageId, progress))
+        setVoiceMessageCurrentTime(prev => new Map(prev).set(messageId, currentTime))
+      }
+    })
+    
+    audio.addEventListener('ended', () => {
+      setPlayingVoiceMessages(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(messageId)
+        return newSet
+      })
+      setVoiceMessageProgress(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(messageId)
+        return newMap
+      })
+      setVoiceMessageCurrentTime(prev => {
+        const newMap = new Map(prev)
+        newMap.delete(messageId)
+        return newMap
+      })
+      audioRefs.current.delete(messageId)
+    })
+    
+    audio.play()
+    setPlayingVoiceMessages(prev => new Set(prev).add(messageId))
+  }
+
+  const pauseVoiceMessage = (messageId: string) => {
+    const audio = audioRefs.current.get(messageId)
+    if (audio) {
+      audio.pause()
+      setPlayingVoiceMessages(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(messageId)
+        return newSet
+      })
+    }
+  }
+
+  const stopVoiceMessage = (messageId: string) => {
+    const audio = audioRefs.current.get(messageId)
+    if (audio) {
+      audio.pause()
+      audio.currentTime = 0
+      setPlayingVoiceMessages(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(messageId)
+        return newSet
+      })
+      setVoiceMessageProgress(prev => {
+        const newMap = new Map(prev)
+        newMap.set(messageId, 0)
+        return newMap
+      })
+      setVoiceMessageCurrentTime(prev => {
+        const newMap = new Map(prev)
+        newMap.set(messageId, 0)
+        return newMap
+      })
+    }
+  }
+
+  // Video state persistence functions
+  const saveVideoState = (metadata: any, playbackState: any) => {
+    try {
+      localStorage.setItem('videoMetadata', JSON.stringify(metadata))
+      localStorage.setItem('videoPlaybackState', JSON.stringify(playbackState))
+    } catch (error) {
+      console.error('Error saving video state:', error)
+    }
+  }
+
+  const loadVideoState = () => {
+    try {
+      const savedMetadata = localStorage.getItem('videoMetadata')
+      const savedPlaybackState = localStorage.getItem('videoPlaybackState')
+      
+      if (savedMetadata) {
+        setVideoMetadata(JSON.parse(savedMetadata))
+      }
+      if (savedPlaybackState) {
+        setVideoPlaybackState(JSON.parse(savedPlaybackState))
+      }
+    } catch (error) {
+      console.error('Error loading video state:', error)
+    }
+  }
+
+  // Autoplay policy handling
+  const tryPlayVideo = async () => {
+    if (!videoRef.current) return
+
+    try {
+      await videoRef.current.play()
+      setIsPlaying(true)
+      setShowResumeOverlay(false)
+    } catch (error: any) {
+      if (error.name === 'NotAllowedError') {
+        console.log('Autoplay blocked, showing resume overlay')
+        setShowResumeOverlay(true)
+      } else {
+        console.error('Error playing video:', error)
+      }
+    }
+  }
+
+  const bindAndSyncVideoElement = (metadata: any, playbackState: any) => {
+    if (!videoRef.current) return
+
+    // Set video metadata
+    setVideoMetadata(metadata)
+    setVideoPlaybackState(playbackState)
+    
+    // Save to localStorage
+    saveVideoState(metadata, playbackState)
+
+    // Sync playback state
+    if (playbackState) {
+      videoRef.current.currentTime = playbackState.currentTime || 0
+      setCurrentTime(playbackState.currentTime || 0)
+      
+      if (playbackState.isPlaying) {
+        tryPlayVideo()
+      } else {
+        setIsPlaying(false)
+      }
     }
   }
 
@@ -579,6 +923,89 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setIsFullscreen(false)
     }
   }
+
+  // Listen for fullscreen changes from browser
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreenNow = !!document.fullscreenElement
+      setIsFullscreen(isFullscreenNow)
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange)
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange)
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange)
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange)
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange)
+    }
+  }, [])
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      const scrollElement = chatScrollRef.current
+      const isAtBottom = scrollElement.scrollHeight - scrollElement.clientHeight <= scrollElement.scrollTop + 100
+      
+      if (isAtBottom) {
+        scrollElement.scrollTop = scrollElement.scrollHeight
+      }
+    }
+  }, [messages])
+
+  // Load video state on mount
+  useEffect(() => {
+    loadVideoState()
+  }, [])
+
+  // Request video state sync when connected as non-host
+  useEffect(() => {
+    if (isConnected && !isHost) {
+      console.log('Non-host connected, requesting video state')
+      socketManager.sendVideoStateRequest()
+    }
+  }, [isConnected, isHost])
+
+  // Listen for video state sync
+  useEffect(() => {
+    const handleVideoStateSync = (data: any) => {
+      console.log('Received video state sync:', data)
+      if (!isHost && data.metadata && data.playbackState) {
+        bindAndSyncVideoElement(data.metadata, data.playbackState)
+      }
+    }
+
+    socketManager.onVideoStateSync(handleVideoStateSync)
+
+    return () => {
+      // Clean up listener if needed
+    }
+  }, [isHost])
+
+  // Cleanup voice messages on unmount
+  useEffect(() => {
+    return () => {
+      // Stop all playing voice messages
+      audioRefs.current.forEach((audio) => {
+        audio.pause()
+        audio.src = ''
+      })
+      audioRefs.current.clear()
+      setPlayingVoiceMessages(new Set())
+      setVoiceMessageProgress(new Map())
+      setVoiceMessageCurrentTime(new Map())
+      
+      // Revoke blob URLs to prevent memory leaks
+      messages.forEach(msg => {
+        if (msg.type === 'voice' && msg.audioUrl && msg.audioUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(msg.audioUrl)
+        }
+      })
+    }
+  }, [messages])
 
   // Video player content
   const getVideoPlayerContent = () => {
@@ -1006,75 +1433,399 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             } 
               flex flex-col`}
           >
-            {/* Chat Tab Buttons */}
+            {/* Participants Header */}
             <div className="p-4 border-b border-gray-800">
-              <div className="flex space-x-2">
-                <Button
-                  variant={activeTab === "group" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setActiveTab("group")}
-                  className="flex-1"
-                >
-                  <MessageCircle className="mr-2 h-4 w-4" />
-                  Group
-                </Button>
-                <Button
-                  variant={activeTab === "private" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => setActiveTab("private")}
-                  className="flex-1"
-                >
-                  Private
-                </Button>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-white font-semibold text-lg">Chat</h3>
+                <div className="flex -space-x-2">
+                  {participants.slice(0, 5).map((participant) => (
+                    <Avatar key={participant.user.id} className="h-8 w-8 border-2 border-gray-800">
+                      <AvatarImage src={participant.user.picture || "/placeholder.svg"} />
+                      <AvatarFallback className="text-xs bg-gray-700">
+                        {participant.user.name.split(" ").map((n) => n[0]).join("")}
+                      </AvatarFallback>
+                    </Avatar>
+                  ))}
+                  {participants.length > 5 && (
+                    <div className="h-8 w-8 rounded-full bg-gray-600 border-2 border-gray-800 flex items-center justify-center">
+                      <span className="text-xs text-white">+{participants.length - 5}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* Chat Messages */}
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
+            <div className="flex-1 overflow-y-auto p-4" ref={chatScrollRef}>
+              <div className="space-y-3">
                 {messages
-                  .filter((msg) => (activeTab === "group" ? !msg.isPrivate : msg.isPrivate))
-                  .map((msg, index) => (
-                    <div key={`${msg.id}-${index}`} className="flex space-x-2">
-                      <Avatar className="h-8 w-8">
-                        <AvatarImage src={msg.user.picture || "/placeholder.svg"} />
-                        <AvatarFallback className="text-xs">
-                          {msg.user.name
-                            .split(" ")
-                            .map((n) => n[0])
-                            .join("")}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-1">
-                          <span className="text-sm font-medium text-white">{msg.user.name}</span>
-                          <span className="text-xs text-gray-400">{msg.timestamp}</span>
+                  .filter((msg) => !msg.isPrivate)
+                  .map((msg, index) => {
+                    const isOwnMessage = msg.user.id === user?.id
+                    return (
+                      <div key={`${msg.id}-${index}`} className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}>
+                        {!isOwnMessage && (
+                          <Avatar className="h-8 w-8 mr-2 flex-shrink-0">
+                            <AvatarImage src={msg.user.picture || "/placeholder.svg"} />
+                            <AvatarFallback className="text-xs bg-gray-700">
+                              {msg.user.name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")}
+                            </AvatarFallback>
+                          </Avatar>
+                        )}
+                        <div className={`max-w-[70%] ${isOwnMessage ? 'order-1' : 'order-2'}`}>
+                          {!isOwnMessage && (
+                            <div className="flex items-center space-x-2 mb-1">
+                              <span className="text-sm font-medium text-white">{msg.user.name}</span>
+                            </div>
+                          )}
+                          <div className={`rounded-2xl px-4 py-2 shadow-sm ${
+                            isOwnMessage 
+                              ? 'bg-purple-600 text-white' 
+                              : 'bg-gray-700 text-gray-200'
+                          }`}>
+                            {msg.type === 'voice' ? (
+                              /* WhatsApp-style Voice Message Display */
+                              <div className="flex items-center space-x-3 min-w-[200px]">
+                                {/* Avatar */}
+                                <Avatar className="h-8 w-8 flex-shrink-0">
+                                  <AvatarImage src={msg.user.picture || "/placeholder.svg"} />
+                                  <AvatarFallback className="text-xs bg-gray-700">
+                                    {msg.user.name.split(" ").map((n: string) => n[0]).join("")}
+                                  </AvatarFallback>
+                                </Avatar>
+                                
+                                {/* Voice Message Content */}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center space-x-3">
+                                    {/* Play/Pause Button */}
+                                    {playingVoiceMessages.has(msg.id) ? (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => pauseVoiceMessage(msg.id)}
+                                        className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full animate-pulse"
+                                      >
+                                        <Pause className="h-4 w-4" />
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => msg.audioUrl && playVoiceMessage(msg.id, msg.audioUrl)}
+                                        className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full"
+                                      >
+                                        <Play className="h-4 w-4" />
+                                      </Button>
+                                    )}
+                                    
+                                    {/* Progress Bar with Waveform */}
+                                    <div className="flex-1 min-w-0">
+                                      <div className="w-full h-1.5 bg-black/20 rounded-full overflow-hidden relative">
+                                        {/* Waveform visualization */}
+                                        <div className="absolute inset-0 flex items-center justify-center space-x-px">
+                                          {Array.from({ length: 20 }, (_, i) => (
+                                            <div
+                                              key={i}
+                                              className="w-0.5 bg-current opacity-30"
+                                              style={{
+                                                height: `${Math.random() * 60 + 20}%`,
+                                                opacity: voiceMessageProgress.get(msg.id) || 0 > (i / 20) * 100 ? 0.8 : 0.3
+                                              }}
+                                            />
+                                          ))}
+                                        </div>
+                                        {/* Progress overlay */}
+                                        <div 
+                                          className="h-full bg-current rounded-full transition-all duration-100 relative z-10"
+                                          style={{ width: `${voiceMessageProgress.get(msg.id) || 0}%` }}
+                                        ></div>
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Duration and Current Time */}
+                                    <span className="text-xs opacity-70 min-w-[40px] text-right">
+                                      {voiceMessageCurrentTime.get(msg.id) ? 
+                                        `${Math.floor(voiceMessageCurrentTime.get(msg.id)!)}s` : 
+                                        `${msg.duration}s`
+                                      }
+                                    </span>
+                                    
+                                    {/* Sending indicator for own messages */}
+                                    {msg.user.id === user?.id && msg.audioUrl?.startsWith('blob:') && (
+                                      <div className="ml-2">
+                                        {msg.failed ? (
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => {
+                                              // Retry sending the voice message
+                                              if (msg.audioUrl && msg.duration) {
+                                                // Convert blob URL back to blob and retry
+                                                fetch(msg.audioUrl)
+                                                  .then(res => res.blob())
+                                                  .then(blob => {
+                                                    socketManager.sendVoiceMessage(blob, msg.duration || 0, false, {
+                                                      id: user?.id || '',
+                                                      name: user?.name || 'You',
+                                                      picture: user?.picture || ''
+                                                    }).then(() => {
+                                                      // Mark as sent successfully
+                                                      setMessages(prev => prev.map(m => 
+                                                        m.id === msg.id 
+                                                          ? { ...m, failed: false }
+                                                          : m
+                                                      ))
+                                                    }).catch(console.error)
+                                                  })
+                                              }
+                                            }}
+                                            className="h-6 w-6 p-0 text-red-400 hover:text-red-300"
+                                          >
+                                            <AlertCircle className="h-3 w-3" />
+                                          </Button>
+                                        ) : (
+                                          <Loader2 className="h-3 w-3 text-current animate-spin opacity-70" />
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm leading-relaxed">{msg.message}</p>
+                            )}
+                          </div>
                         </div>
-                        <p className="text-sm text-gray-300">{msg.message}</p>
+                        {isOwnMessage && (
+                          <Avatar className="h-8 w-8 ml-2 flex-shrink-0">
+                            <AvatarImage src={msg.user.picture || "/placeholder.svg"} />
+                            <AvatarFallback className="text-xs bg-purple-700">
+                              {msg.user.name
+                                .split(" ")
+                                .map((n) => n[0])
+                                .join("")}
+                            </AvatarFallback>
+                          </Avatar>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
               </div>
-            </ScrollArea>
+            </div>
 
+            {/* Recording Indicator */}
+            {isRecording && (
+              <div className="px-4 py-2 bg-red-600/20 border-l-4 border-red-500">
+                <div className="flex items-center space-x-2 text-red-400">
+                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm font-medium">Recording voice message...</span>
+                  <span className="text-xs opacity-70">{recordingTime.toFixed(1)}s</span>
+                  <div className="ml-auto">
+                    <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             {/* Message Input */}
             <div className="p-4 border-t border-gray-800">
-              <div className="flex space-x-2">
-                <Input
-                  placeholder="Type a message..."
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
-                  className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1"
-                />
-                <Button onClick={handleSendMessage} className="bg-purple-600 hover:bg-purple-700 px-3">
-                  <Send className="h-4 w-4" />
-                </Button>
-              </div>
+              {audioBlob ? (
+                /* WhatsApp-style Voice Message Preview */
+                <div className="space-y-3">
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <div className="flex items-center space-x-3">
+                      {/* Avatar */}
+                      <Avatar className="h-8 w-8 flex-shrink-0">
+                        <AvatarImage src={user?.picture || "/placeholder.svg"} />
+                        <AvatarFallback className="text-xs bg-purple-700">
+                          {user?.name?.split(" ").map((n: string) => n[0]).join("") || "U"}
+                        </AvatarFallback>
+                      </Avatar>
+                      
+                      {/* Voice Message Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center space-x-3">
+                          {/* Play Button */}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (audioBlob) {
+                                const audio = new Audio(URL.createObjectURL(audioBlob))
+                                audio.play()
+                              }
+                            }}
+                            className="h-8 w-8 p-0 text-purple-400 hover:text-purple-300 rounded-full"
+                          >
+                            <Play className="h-4 w-4" />
+                          </Button>
+                          
+                          {/* Progress Bar with Waveform */}
+                          <div className="flex-1 min-w-0">
+                            <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden relative">
+                              {/* Waveform visualization */}
+                              <div className="absolute inset-0 flex items-center justify-center space-x-px">
+                                {Array.from({ length: 20 }, (_, i) => (
+                                  <div
+                                    key={i}
+                                    className="w-0.5 bg-purple-400 opacity-30"
+                                    style={{
+                                      height: `${Math.random() * 60 + 20}%`,
+                                      opacity: (recordingTime / Math.max(recordingTime, 1)) > (i / 20) ? 0.8 : 0.3
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                              {/* Progress overlay */}
+                              <div 
+                                className="h-full bg-purple-600 rounded-full transition-all duration-100 relative z-10"
+                                style={{ width: `${(recordingTime / Math.max(recordingTime, 1)) * 100}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                          
+                          {/* Duration */}
+                          <span className="text-xs text-gray-400 min-w-[30px] text-right">
+                            {recordingTime}s
+                          </span>
+                          
+                          {/* Recording indicator */}
+                          <div className="ml-2">
+                            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                          </div>
+                          
+                          {/* Recording time indicator */}
+                          <div className="ml-2">
+                            <span className="text-xs text-red-400 font-medium">REC</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Delete Button */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setAudioBlob(null)}
+                        className="h-8 w-8 p-0 text-red-400 hover:text-red-300 rounded-full"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex space-x-2">
+                    <Button
+                      onClick={handleSendVoiceMessage}
+                      disabled={isSendingVoiceMessage}
+                      className="bg-purple-600 hover:bg-purple-700 flex-1 disabled:opacity-50"
+                    >
+                      {isSendingVoiceMessage ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Sending Voice Message...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4 mr-2" />
+                          Send Voice Message
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setAudioBlob(null)
+                        setRecordingTime(0)
+                      }}
+                      variant="outline"
+                      className="border-gray-600 text-gray-300 hover:bg-gray-700"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                /* Text Message Input */
+                <div className="flex space-x-2">
+                  <Input
+                    placeholder={isRecording ? `Recording voice message... ${recordingTime.toFixed(1)}s` : "Type a message..."}
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === "Enter" && message.trim() && !isRecording) {
+                        e.preventDefault()
+                        handleSendMessage()
+                      }
+                    }}
+                    className={`bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1 transition-all duration-200 ${
+                      isRecording ? 'border-red-500 placeholder:text-red-400' : ''
+                    }`}
+                    disabled={isRecording}
+                  />
+                  <Button
+                    onMouseDown={() => {
+                      if (!isRecording) {
+                        startRecording()
+                      }
+                    }}
+                    onMouseUp={() => {
+                      if (isRecording) {
+                        stopRecording()
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      if (isRecording) {
+                        stopRecording()
+                      }
+                    }}
+                    className={`px-3 transition-all duration-200 ${
+                      isRecording 
+                        ? 'bg-red-600 hover:bg-red-700 animate-pulse' 
+                        : 'bg-gray-600 hover:bg-gray-700'
+                    }`}
+                  >
+                    {isRecording ? (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                        <Mic className="h-4 w-4" />
+                        <span className="text-xs font-medium text-white">{recordingTime.toFixed(1)}s</span>
+                      </div>
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
+                  </Button>
+                  <Button 
+                    onClick={handleSendMessage} 
+                    disabled={!message.trim() || isRecording}
+                    className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
+
+      {/* Resume Playback Overlay */}
+      {showResumeOverlay && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 text-center">
+            <AlertCircle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+            <h3 className="text-xl font-bold text-white mb-2">Video Ready to Play</h3>
+            <p className="text-gray-400 mb-4">Click below to resume playback</p>
+            <Button
+              onClick={tryPlayVideo}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              <Play className="mr-2 h-4 w-4" />
+              Resume Playback
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

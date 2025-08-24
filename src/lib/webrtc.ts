@@ -348,6 +348,14 @@ class WebRTCManager {
 
     dataChannel.onerror = (e) => {
       console.error(`[WebRTC] Data channel error for peer ${peerId}:`, e);
+      // Try to recover from data channel errors
+      const peer = this.peers.get(peerId);
+      if (peer) {
+        console.log(`[WebRTC] Attempting to recover data channel for peer ${peerId}`);
+        // Mark as disconnected and let reconnection logic handle it
+        peer.isConnected = false;
+        peer.connectionState = 'failed';
+      }
     };
 
     if (!isHost) {
