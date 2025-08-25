@@ -1,3 +1,4 @@
+// app/(routes)/rooms/[roomId]/page.tsx (full updated TheaterPage)
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
@@ -8,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Monitor, Loader2, StopCircle,
-  Crown, Settings, Users, Send, Video, Youtube, AlertCircle
+  Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2
 } from "lucide-react";
 
 import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket";
@@ -53,6 +54,15 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
+
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
+  const [recordedDuration, setRecordedDuration] = useState<number>(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const recordedStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const recordingStartRef = useRef<number | null>(null);
 
   const isHost = user?.id === roomInfo?.host?.id;
 
@@ -225,6 +235,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               if (parsed?.type === "user-joined") return;
             }
           } catch {}
+          if (msg.type === "voice" && msg.audioUrl) {
+            if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
+          }
           setMessages(prev => [...prev, msg]);
           if (!isChatVisible) setUnreadCount(c => c + 1);
         });
@@ -458,6 +471,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const toggleMute = () => {
     if (!videoRef.current) return;
+    if (isHost) {
+      const newMuted = !isMuted;
+      // mute only host local playback
+      webrtcManager.setLocalMuted(newMuted);
+      setIsMuted(newMuted);
+      return;
+    }
     videoRef.current.muted = !isMuted;
     setIsMuted(!isMuted);
   };
@@ -465,7 +485,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.target.value);
     setVolume(v);
-    if (videoRef.current) videoRef.current.volume = v;
+    if (isHost) {
+      // host playback uses localPlaybackGain; also keep send volume at 1 by default
+      webrtcManager.setLocalVolume(v);
+    } else if (videoRef.current) {
+      videoRef.current.volume = v;
+    }
     setIsMuted(v === 0);
   };
 
@@ -543,10 +568,163 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   }, [messages]);
 
   const formatTime = (t: number) => {
-    if (!t || !isFinite(t)) return "00:00";
-    const m = Math.floor(t / 60), s = Math.floor(t % 60);
-    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    if (!t || !isFinite(t) || t <= 0) return "0:00";
+    const total = Math.floor(t);
+    const hours = Math.floor(total / 3600);
+    const mins = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    const two = (n: number) => n.toString().padStart(2, "0");
+    if (hours > 0) return `${hours}:${two(mins)}:${two(secs)}`;
+    return `${mins}:${two(secs)}`;
   };
+
+  // Recording helpers
+  const startRecording = async () => {
+    try {
+      recordedChunksRef.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordedStreamRef.current = stream;
+      const options: MediaRecorderOptions = {};
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        options.mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
+        options.mimeType = 'audio/webm';
+      }
+      const mr = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = mr;
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      mr.onstop = async () => {
+        try {
+          const blob = new Blob(recordedChunksRef.current, { type: recordedChunksRef.current.length > 0 ? (recordedChunksRef.current[0] as any).type || 'audio/webm' : 'audio/webm' });
+          setRecordedBlob(blob);
+          // get duration reliably
+          const url = URL.createObjectURL(blob);
+          const a = new Audio(url);
+          a.preload = "metadata";
+          a.onloadedmetadata = () => {
+            const d = a.duration || 0;
+            setRecordedDuration(Math.round(d));
+            URL.revokeObjectURL(url);
+          };
+        } catch (e) {
+          setRecordedBlob(null);
+          setRecordedDuration(0);
+        } finally {
+          try { recordedStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+          recordedStreamRef.current = null;
+          if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+          recordingStartRef.current = null;
+        }
+      };
+      mr.start();
+      setIsRecording(true);
+      setRecordedBlob(null);
+      setRecordedDuration(0);
+      recordingStartRef.current = Date.now();
+      recordingTimerRef.current = window.setInterval(() => {
+        if (!recordingStartRef.current) return;
+        const secs = Math.floor((Date.now() - recordingStartRef.current) / 1000);
+        setRecordedDuration(secs);
+      }, 250);
+    } catch (e) {
+      console.error("record start fail", e);
+    }
+  };
+
+  const stopRecording = () => {
+    try {
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+    } catch (e) {}
+  };
+
+  const cancelRecording = () => {
+    try {
+      mediaRecorderRef.current?.stop();
+    } catch {}
+    setIsRecording(false);
+    setRecordedBlob(null);
+    setRecordedDuration(0);
+    try { recordedStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    recordedStreamRef.current = null;
+    if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    recordingStartRef.current = null;
+  };
+
+  const sendVoice = async () => {
+    if (!recordedBlob) return;
+    try {
+      const localMsg: SocketMessage = {
+        id: `local-voice-${Date.now()}`,
+        user: { id: user?.id || "", name: user?.name || "You", picture: user?.picture || "" },
+        message: 'Voice message',
+        timestamp: new Date().toLocaleTimeString(),
+        isPrivate: false,
+        type: 'voice',
+        audioUrl: URL.createObjectURL(recordedBlob),
+        duration: Math.round(recordedDuration)
+      };
+      setMessages(prev => [...prev, localMsg]);
+      await socketManager.sendVoiceMessage(recordedBlob, Math.round(recordedDuration), false, { id: user?.id, name: user?.name, picture: user?.picture });
+      setRecordedBlob(null);
+      setRecordedDuration(0);
+    } catch (e) {
+      console.error("sendVoice fail", e);
+    }
+  };
+
+  // Voice player component
+  function VoicePlayer({ audioUrl, duration }: { audioUrl?: string; duration?: number }) {
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const [playing, setPlaying] = useState(false);
+    const [pos, setPos] = useState(0);
+
+    useEffect(() => {
+      const a = audioRef.current;
+      if (!a) return;
+      const onTime = () => setPos(a.currentTime || 0);
+      const onEnd = () => { setPlaying(false); setPos(0); };
+      a.addEventListener('timeupdate', onTime);
+      a.addEventListener('ended', onEnd);
+      return () => {
+        a.removeEventListener('timeupdate', onTime);
+        a.removeEventListener('ended', onEnd);
+      };
+    }, []);
+
+    const toggle = async () => {
+      const a = audioRef.current;
+      if (!a) return;
+      if (playing) {
+        a.pause();
+        setPlaying(false);
+      } else {
+        try {
+          await a.play();
+          setPlaying(true);
+        } catch {
+          setPlaying(false);
+        }
+      }
+    };
+
+    return (
+      <div className="flex items-center space-x-2">
+        <button onClick={toggle} className="p-2 rounded bg-gray-700/60 text-white">
+          {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+        </button>
+        <div className="flex-1">
+          <div className="w-full h-2 bg-gray-600 rounded overflow-hidden">
+            <div className="h-full bg-purple-600" style={{ width: `${duration ? (pos / duration) * 100 : 0}%` }} />
+          </div>
+          <div className="text-xs text-gray-300 mt-1">{formatTime(pos)} / {formatTime(duration || 0)}</div>
+        </div>
+        <audio ref={audioRef} src={audioUrl} preload="auto" />
+      </div>
+    );
+  }
 
   if (isLoading) return (
     <div className="min-h-screen bg-black flex items-center justify-center">
@@ -673,7 +851,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                     <div className={`max-w-[70%] ${isOwn ? "order-1" : "order-2"}`}>
                       {!isOwn && <div className="flex items-center space-x-2 mb-1"><span className="text-sm font-medium text-white">{m.user.name}</span></div>}
                       <div className={`rounded-2xl px-4 py-2 shadow-sm ${isOwn ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-200"}`}>
-                        <p className="text-sm leading-relaxed">{m.type === "voice" ? "Voice message" : m.message}</p>
+                        {m.type === "voice" ? (
+                          <VoicePlayer audioUrl={m.audioUrl} duration={m.duration} />
+                        ) : (
+                          <p className="text-sm leading-relaxed">{m.message}</p>
+                        )}
                       </div>
                     </div>
                     {isOwn && (
@@ -689,16 +871,44 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           </div>
 
           <div className="p-4 border-t border-gray-800">
-            <div className="flex space-x-2">
+            <div className="flex space-x-2 items-center">
               <Input
                 placeholder="Type a message..."
                 value={message}
                 onChange={(e)=>setMessage(e.target.value)}
                 onKeyDown={(e)=>{ if (e.key === "Enter" && message.trim()) { e.preventDefault(); sendMessage(); } }}
                 className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1"
+                disabled={isRecording}
               />
-              <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>
+              <div className="flex items-center space-x-2">
+                {!recordedBlob ? (
+                  <button
+                    onClick={() => { if (isRecording) stopRecording(); else startRecording(); }}
+                    className={`p-2 rounded ${isRecording ? "bg-red-600 text-white" : "bg-gray-700 text-white"}`}
+                    title={isRecording ? "Stop recording" : "Record voice message"}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <button onClick={() => { setRecordedBlob(null); setRecordedDuration(0); }} className="p-2 rounded bg-gray-700 text-white"><Trash2 className="w-4 h-4" /></button>
+                    <Button onClick={sendVoice} className="bg-purple-600 hover:bg-purple-700 px-3"><Send className="h-4 w-4" /></Button>
+                  </div>
+                )}
+                {!recordedBlob && <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>}
+              </div>
             </div>
+
+            {isRecording && (
+              <div className="mt-2 text-xs text-gray-300">Recording... {formatTime(recordedDuration)}</div>
+            )}
+
+            {recordedBlob && (
+              <div className="mt-3">
+                <div className="text-xs text-gray-300 mb-1">Preview</div>
+                <VoicePlayer audioUrl={URL.createObjectURL(recordedBlob)} duration={recordedDuration} />
+              </div>
+            )}
           </div>
         </div>
       </div>
