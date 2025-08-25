@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Monitor, Loader2, StopCircle,
-  Crown, Settings, Users, Send, Mic, Video, Youtube, AlertCircle
+  Crown, Settings, Users, Send, Video, Youtube, AlertCircle
 } from "lucide-react";
 
 import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket";
@@ -20,7 +20,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 export default function TheaterPage({ params }: { params: Promise<{ roomId: string }> }) {
   const router = useRouter();
 
-  // user & room
   const [user, setUser] = useState<any>(null);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -28,7 +27,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ytContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -36,7 +34,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
 
-  // playback & UI
   const [currentVideoType, setCurrentVideoType] = useState<"youtube" | "screen" | "file" | null>(null);
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -49,26 +46,23 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const [isChatVisible, setIsChatVisible] = useState(true);
+  const [isChatVisible] = useState(true);
   const [message, setMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [showResumeOverlay, setShowResumeOverlay] = useState(false);
 
-  // webrtc UI
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
 
   const isHost = user?.id === roomInfo?.host?.id;
 
-  // helpers
   const extractYouTubeId = (url: string): string | null => {
     if (!url) return null;
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
     const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
+    return match && match[2] && match[2].length === 11 ? match[2] : null;
   };
 
-  // YouTube API loader & player store
   const ytApiLoadedRef = useRef<Promise<void> | null>(null);
   const loadYouTubeAPI = useCallback(() => {
     if (ytApiLoadedRef.current) return ytApiLoadedRef.current;
@@ -108,7 +102,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             if (!isHost) return;
             const state = e.data;
             if (state === 1) {
-              const ct = (e.target.getCurrentTime ? e.target.getCurrentTime() : 0);
+              const ct = e.target.getCurrentTime ? e.target.getCurrentTime() : 0;
               socketManager.playVideo(ct);
             } else if (state === 2) {
               socketManager.pauseVideo();
@@ -124,7 +118,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   }, [loadYouTubeAPI, isHost]);
 
-  // keep webrtc status updated
   useEffect(() => {
     const t = setInterval(() => {
       const status = webrtcManager.getConnectionStatus();
@@ -137,13 +130,50 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return () => clearInterval(t);
   }, []);
 
-  // init: connect socket, setup listeners, join room, fetch room info
+  const waitForSocketAuth = (token: string, timeoutMs = 8000) =>
+    new Promise<void>((resolve, reject) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true;
+          reject(new Error("Socket auth timeout"));
+        }
+      }, timeoutMs);
+
+      const offAuth = socketManager.onAuthenticated?.(() => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        offAuth?.();
+        resolve();
+      });
+
+      socketManager.authenticate?.(token);
+
+      if (!offAuth) {
+        const poll = () => {
+          if (done) return;
+          if (socketManager.isAuthenticated?.()) {
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          } else {
+            setTimeout(poll, 150);
+          }
+        };
+        poll();
+      }
+    });
+
   useEffect(() => {
     let mounted = true;
+    let authInFlight = true;
+
     const init = async () => {
       try {
         const resolved = await params;
         const roomId = resolved.roomId;
+
         const currentUser = getCurrentUser();
         const token = getToken();
         if (!currentUser || !token) {
@@ -152,8 +182,21 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
         setUser(currentUser);
 
-        socketManager.connect();
+        try {
+          socketManager.connect?.({ auth: { token } });
+        } catch {
+          socketManager.connect();
+        }
         webrtcManager.ensureSocketListeners();
+
+        socketManager.onError((err) => {
+          if (!mounted) return;
+          if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
+          setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
+        });
+
+        await waitForSocketAuth(token);
+        authInFlight = false;
 
         socketManager.onRoomInfo((room) => {
           if (!mounted) return;
@@ -175,9 +218,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           if (webrtcManager.isHostUser()) webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
         });
 
-        // Messages
         socketManager.onMessage((msg) => {
-          // don't show join JSON messages in chat
           try {
             if (msg.message) {
               const parsed = JSON.parse(msg.message);
@@ -188,7 +229,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           if (!isChatVisible) setUnreadCount(c => c + 1);
         });
 
-        // Video control + metadata + state sync
         socketManager.onVideoControl((data) => handleVideoControl(data));
 
         socketManager.onVideoMetadata((metadata) => {
@@ -206,7 +246,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             if (videoRef.current) {
               try { webrtcManager.setVideoElement(videoRef.current); } catch {}
             }
-            // Ask host for full state with retries
             for (let i = 0; i < 4; i++) {
               setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
             }
@@ -223,9 +262,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               const id = extractYouTubeId(metadata.url || "");
               setYoutubeVideoId(id);
               setCurrentVideoType("youtube");
-              createYouTubePlayer(id, playback?.currentTime || 0, playback?.isPlaying || false, true).then((player) => {
-                setTimeout(() => { try { player?.unMute?.(); } catch {} }, 300);
-              }).catch(console.error);
+              createYouTubePlayer(id, playback?.currentTime || 0, playback?.isPlaying || false, true)
+                .then((player) => { setTimeout(() => { try { player?.unMute?.(); } catch {} }, 300); })
+                .catch(console.error);
             } else {
               setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
               if (videoRef.current) webrtcManager.setVideoElement(videoRef.current);
@@ -234,21 +273,14 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           }
         });
 
-        socketManager.onError((err) => {
-          if (!mounted) return;
-          setError(err);
-        });
+        socketManager.joinRoom(roomId);
 
-        setTimeout(() => socketManager.joinRoom(roomId), 700);
-
-        const token2 = getToken();
-        const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token2}` }});
+        const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token}` }});
         const data = await resp.json();
         if (data.success) {
           setRoomInfo(data.room);
           setParticipants(data.room.participants || []);
         }
-
       } catch (e) {
         console.error("init error", e);
         if (mounted) {
@@ -260,13 +292,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
     init();
     return () => {
+      mounted = false;
       socketManager.leaveRoom();
       webrtcManager.cleanup();
-      // no join toast kept
     };
   }, [params, router]);
 
-  // handle remote video controls
   const handleVideoControl = (data: any) => {
     if (!data) return;
     if (data.type && currentVideoType === "youtube") {
@@ -277,7 +308,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       if (data.type === "seek") { try { player.seekTo(data.time || 0, true); } catch {} }
       return;
     }
-
     if (!videoRef.current) return;
     try {
       if (data.type === "play") {
@@ -293,7 +323,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     } catch (e) { console.error("handleVideoControl", e); }
   };
 
-  // Host: paste youtube url => create player & send metadata
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -307,7 +336,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         setCurrentVideoType("youtube");
         await createYouTubePlayer(id, 0, true, false);
         socketManager.sendVideoMetadata({ name: `YouTube-${id}`, size: 0, type: "youtube", url: youtubeUrl });
-        socketManager.sendVideoStateSync({ metadata: { name: `YouTube-${id}`, type: "youtube", url: youtubeUrl }, playbackState: { currentTime: 0, isPlaying: true, volume, isMuted } });
+        socketManager.sendVideoStateSync({
+          metadata: { name: `YouTube-${id}`, type: "youtube", url: youtubeUrl },
+          playbackState: { currentTime: 0, isPlaying: true, volume, isMuted }
+        });
       } catch (e) {
         console.error("host youtube error", e);
       } finally {
@@ -317,18 +349,19 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return () => { cancelled = true; };
   }, [youtubeUrl, isHost, createYouTubePlayer, volume, isMuted]);
 
-  // Screen sharing
   const handleShareScreen = async () => {
     try {
       setIsLoadingVideo(true);
       const stream = await webrtcManager.startScreenShare();
       if (videoRef.current) {
-        try { videoRef.current.srcObject = stream; videoRef.current.muted = false; await videoRef.current.play().catch(()=>{}); } catch {}
+        try { (videoRef.current as any).srcObject = stream; videoRef.current.muted = false; await videoRef.current.play().catch(()=>{}); } catch {}
       }
       setCurrentVideoType("screen");
       socketManager.sendVideoMetadata({ name: "Screen Share", size: 0, type: "screen", url: "screen-share" });
-      // inform peers of state and rely on webrtcManager to renegotiate
-      socketManager.sendVideoStateSync({ metadata: { name: "Screen Share", type: "screen", url: "screen-share" }, playbackState: { currentTime: 0, isPlaying: true, volume: 1, isMuted: false } });
+      socketManager.sendVideoStateSync({
+        metadata: { name: "Screen Share", type: "screen", url: "screen-share" },
+        playbackState: { currentTime: 0, isPlaying: true, volume: 1, isMuted: false }
+      });
     } catch (e) {
       console.error("share screen error", e);
       setError("Screen share failed / permission denied");
@@ -342,13 +375,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       webrtcManager.stopScreenShare();
       setCurrentVideoType(null);
       setIsPlaying(false);
-      if (videoRef.current) try { videoRef.current.srcObject = null; } catch {}
+      if (videoRef.current) try { (videoRef.current as any).srcObject = null; } catch {}
       socketManager.sendVideoMetadata({ name: "None", size: 0, type: "stopped", url: "" });
     } catch (e) { console.warn(e); }
   };
 
-  // File select
   const handleSelectVideo = () => fileInputRef.current?.click();
+
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -356,23 +389,18 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     setSelectedVideoFile(file);
     setCurrentVideoType("file");
     setIsLoadingVideo(true);
-
-    // Immediately stop previous and start new streaming if host has videoRef
     try { webrtcManager.stopFileStream(); } catch {}
     setTimeout(() => {
       socketManager.sendVideoMetadata({ name: file.name, size: file.size, type: file.type, url: "p2p" });
-      // start streaming immediately if we have video element
       if (isHost && videoRef.current) {
         try {
-          webrtcManager.streamVideoFile(file, videoRef.current).catch((err)=>console.error('streamVideoFile err',err));
+          webrtcManager.streamVideoFile(file, videoRef.current).catch((err)=>console.error("streamVideoFile err", err));
         } catch (e) { console.error(e); }
       }
     }, 200);
-
     setIsLoadingVideo(false);
   };
 
-  // Host file streaming startup effect (try retries if mount timing)
   const hasStartedStreamingRef = useRef(false);
   useEffect(() => {
     if (!isHost) return;
@@ -394,14 +422,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return () => { clearTimeout(r1); clearTimeout(r2); };
   }, [selectedVideoFile, isHost]);
 
-  // non-host: bind receiver element as early as possible
   useEffect(() => {
     if (!isHost && videoRef.current) {
       try { webrtcManager.setVideoElement(videoRef.current); } catch (e) { console.warn(e); }
     }
   }, [isHost]);
 
-  // playback controls
   const togglePlayPause = async () => {
     if (currentVideoType === "youtube") {
       const player = getYTPlayer();
@@ -418,7 +444,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       }
       return;
     }
-
     if (!videoRef.current) return;
     if (isPlaying) {
       videoRef.current.pause();
@@ -465,7 +490,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (isHost) socketManager.seekVideo(seekTime);
   };
 
-  // bind video element
   const bindVideo = (el: HTMLVideoElement | null) => {
     if (el) {
       videoRef.current = el;
@@ -476,9 +500,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       el.onplay = () => setIsPlaying(true);
       el.onpause = () => setIsPlaying(false);
       if (!isHost) {
-        try { webrtcManager.setVideoElement(el); } catch (e) { console.warn(e); }
-        // request host to resend state so non-host can attach
-        for (let i=0;i<3;i++) setTimeout(()=>socketManager.sendVideoStateRequest(), 250*i+200);
+        try { webrtcManager.setVideoElement(el); } catch {}
+        for (let i = 0; i < 3; i++) setTimeout(() => socketManager.sendVideoStateRequest(), 250 * i + 200);
       }
     } else {
       videoRef.current = null;
@@ -496,7 +519,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   };
 
-  // chat send
   const sendMessage = () => {
     if (!message.trim()) return;
     const msgText = message.trim();
@@ -588,7 +610,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               {currentVideoType === "youtube" && youtubeVideoId ? (
                 <div ref={ytContainerRef} className="w-full h-full" />
               ) : (
-                // mobile: height 40vh, desktop: full height
                 <video ref={bindVideo as any} className="w-full h-full object-contain bg-black" autoPlay playsInline />
               )}
             </div>
@@ -623,13 +644,15 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           </div>
         </div>
 
-        {/* Chat area: on mobile it becomes bottom area */}
         <div className="md:w-80 w-full md:h-auto h-[60vh] bg-gray-900 border-t md:border-l md:border-t-0 border-gray-800 flex flex-col">
           <div className="p-4 border-b border-gray-800 flex items-center justify-between">
             <h3 className="text-white font-semibold">Chat</h3>
             <div className="flex -space-x-2">
               {participants.slice(0,5).map(p => (
-                <Avatar key={p.user.id} className="h-8 w-8 border-2 border-gray-800"><AvatarImage src={p.user.picture || "/placeholder.svg"} /><AvatarFallback className="text-xs bg-gray-700">{p.user.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback></Avatar>
+                <Avatar key={p.user.id} className="h-8 w-8 border-2 border-gray-800">
+                  <AvatarImage src={p.user.picture || "/placeholder.svg"} />
+                  <AvatarFallback className="text-xs bg-gray-700">{p.user.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback>
+                </Avatar>
               ))}
               {participants.length > 5 && <div className="h-8 w-8 rounded-full bg-gray-600 border-2 border-gray-800 flex items-center justify-center"><span className="text-xs text-white">+{participants.length-5}</span></div>}
             </div>
@@ -641,14 +664,24 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 const isOwn = m.user.id === user?.id;
                 return (
                   <div key={`${m.id}-${idx}`} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
-                    {!isOwn && (<Avatar className="h-8 w-8 mr-2 flex-shrink-0"><AvatarImage src={m.user.picture || "/placeholder.svg"} /><AvatarFallback className="text-xs bg-gray-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback></Avatar>)}
+                    {!isOwn && (
+                      <Avatar className="h-8 w-8 mr-2 flex-shrink-0">
+                        <AvatarImage src={m.user.picture || "/placeholder.svg"} />
+                        <AvatarFallback className="text-xs bg-gray-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback>
+                      </Avatar>
+                    )}
                     <div className={`max-w-[70%] ${isOwn ? "order-1" : "order-2"}`}>
                       {!isOwn && <div className="flex items-center space-x-2 mb-1"><span className="text-sm font-medium text-white">{m.user.name}</span></div>}
                       <div className={`rounded-2xl px-4 py-2 shadow-sm ${isOwn ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-200"}`}>
                         <p className="text-sm leading-relaxed">{m.type === "voice" ? "Voice message" : m.message}</p>
                       </div>
                     </div>
-                    {isOwn && (<Avatar className="h-8 w-8 ml-2 flex-shrink-0"><AvatarImage src={m.user.picture || "/placeholder.svg"} /><AvatarFallback className="text-xs bg-purple-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback></Avatar>)}
+                    {isOwn && (
+                      <Avatar className="h-8 w-8 ml-2 flex-shrink-0">
+                        <AvatarImage src={m.user.picture || "/placeholder.svg"} />
+                        <AvatarFallback className="text-xs bg-purple-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback>
+                      </Avatar>
+                    )}
                   </div>
                 );
               })}
@@ -657,7 +690,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
           <div className="p-4 border-t border-gray-800">
             <div className="flex space-x-2">
-              <Input placeholder="Type a message..." value={message} onChange={(e)=>setMessage(e.target.value)} onKeyPress={(e)=>{ if (e.key === "Enter" && message.trim()) { e.preventDefault(); sendMessage(); } }} className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1" />
+              <Input
+                placeholder="Type a message..."
+                value={message}
+                onChange={(e)=>setMessage(e.target.value)}
+                onKeyDown={(e)=>{ if (e.key === "Enter" && message.trim()) { e.preventDefault(); sendMessage(); } }}
+                className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1"
+              />
               <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>
             </div>
           </div>
@@ -670,14 +709,19 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             <AlertCircle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
             <h3 className="text-xl font-bold text-white mb-2">Video Ready to Play</h3>
             <p className="text-gray-400 mb-4">Click below to resume playback</p>
-            <Button onClick={async () => {
-              setShowResumeOverlay(false);
-              if (currentVideoType === "youtube" && youtubeVideoId) {
-                await createYouTubePlayer(youtubeVideoId, currentTime || 0, true, false);
-              } else {
-                try { await videoRef.current?.play(); } catch {}
-              }
-            }} className="bg-purple-600 hover:bg-purple-700"><Play className="mr-2 h-4 w-4" /> Resume Playback</Button>
+            <Button
+              onClick={async () => {
+                setShowResumeOverlay(false);
+                if (currentVideoType === "youtube" && youtubeVideoId) {
+                  await createYouTubePlayer(youtubeVideoId, currentTime || 0, true, false);
+                } else {
+                  try { await videoRef.current?.play(); } catch {}
+                }
+              }}
+              className="bg-purple-600 hover:bg-purple-700"
+            >
+              <Play className="mr-2 h-4 w-4" /> Resume Playback
+            </Button>
           </div>
         </div>
       )}
