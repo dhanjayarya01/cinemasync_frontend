@@ -1,4 +1,4 @@
-// lib/webrtc.ts
+
 import { socketManager } from './socket';
 
 export interface WebRTCPeer {
@@ -57,18 +57,18 @@ class WebRTCManager {
   private currentVideoFile: File | null = null;
   private currentVideoObjectUrl: string | null = null;
   private videoElement: HTMLVideoElement | null = null;
-  private chunkSize = CHUNK_SIZE; // use const chunk size
+  private chunkSize = CHUNK_SIZE;
 
   // Fallback file-reassembly map: fileId -> { metadata, chunks[] }
   private incomingFiles: Map<string, { chunks: ArrayBuffer[]; totalChunks?: number; metadata?: any }> = new Map();
 
-  // MediaSource fields removed from primary flow (we avoid naive MSE usage)
+  // Prebuffer chunks that arrived before file-start seen
   private prebufferChunks: Array<ArrayBuffer> = [];
 
   // State
   private isSendingFile = false;
 
-  // Store callback references for cleanup
+  // Store socket callback refs for cleanup
   private socketCallbacks: {
     offer: (data: { from: string; offer: any }) => void;
     answer: (data: { from: string; answer: any }) => void;
@@ -77,64 +77,69 @@ class WebRTCManager {
     peerLeft: (data: { peerId: string }) => void;
   } | null = null;
 
+  // Expose for debug/visibility
+  private totalChunksExpected = 0;
+
   constructor() {
     console.log('[WebRTC] WebRTC manager initialized');
   }
 
   setHostStatus(isHost: boolean) {
-    console.log(`[WebRTC] Setting host status to: ${isHost}`);
     this.isHost = isHost;
     this.ensureSocketListeners();
   }
 
-  setVideoElement(videoElement: HTMLVideoElement) {
-    console.log(`[WebRTC] Setting video element for ${this.isHost ? 'host' : 'non-host'} user`);
+  setVideoElement(videoElement: HTMLVideoElement | null) {
     this.videoElement = videoElement;
     this.ensureSocketListeners();
 
-    // If we had prebuffered chunks, we will not attempt MSE; instead they will
-    // be assembled when 'file-end' arrives. If blob was prepared earlier, it will be set then.
+    // If we have prebuffered ArrayBuffers, assemble into a Blob and attach
+    if (videoElement && this.prebufferChunks.length > 0) {
+      try {
+        const parts = this.prebufferChunks.map((ab) => new Uint8Array(ab));
+        const blob = new Blob(parts, { type: 'video/mp4' });
+        if (this.currentVideoObjectUrl) {
+          try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch {}
+          this.currentVideoObjectUrl = null;
+        }
+        const url = URL.createObjectURL(blob);
+        this.currentVideoObjectUrl = url;
+        videoElement.src = url;
+        videoElement.muted = true;
+        videoElement.play().catch(() => {});
+        this.prebufferChunks = [];
+        console.log('[WebRTC] Attached prebuffered video to bound element');
+      } catch (e) {
+        console.warn('[WebRTC] Failed to attach prebuffered video', e);
+      }
+    }
   }
 
   public ensureSocketListeners() {
     if (!this.socketCallbacks) {
-      console.log('[WebRTC] Setting up socket listeners...');
       this.setupSocketListeners();
     }
   }
 
   private setupSocketListeners() {
-    if (this.socketCallbacks) {
-      console.log('[WebRTC] Socket callbacks already registered, skipping');
-      return;
-    }
-
-    this.setupWebRTCCallbacks();
-  }
-
-  private setupWebRTCCallbacks() {
+    if (this.socketCallbacks) return;
     const offerCallback = (data: { from: string; offer: any }) => {
-      console.log(`[WebRTC] Received offer from ${data.from}`);
       this.handleOffer(data.from, data.offer);
     };
 
     const answerCallback = (data: { from: string; answer: any }) => {
-      console.log(`[WebRTC] Received answer from ${data.from}`);
       this.handleAnswer(data.from, data.answer);
     };
 
     const iceCandidateCallback = (data: { from: string; candidate: any }) => {
-      console.log(`[WebRTC] Received ICE candidate from ${data.from}`);
       this.handleIceCandidate(data.from, data.candidate);
     };
 
     const peerJoinedCallback = (data: { peerId: string }) => {
-      console.log(`[WebRTC] Peer ${data.peerId} joined`);
       this.handlePeerJoined(data.peerId);
     };
 
     const peerLeftCallback = (data: { peerId: string }) => {
-      console.log(`[WebRTC] Peer ${data.peerId} left`);
       this.handlePeerLeft(data.peerId);
     };
 
@@ -152,40 +157,36 @@ class WebRTCManager {
     socketManager.onWebRTCPeerJoined(peerJoinedCallback);
     socketManager.onWebRTCPeerLeft(peerLeftCallback);
 
-    // Also listen to socketManager.message for host join hints (if used)
+    // Keep a message listener to debug join messages
     socketManager.onMessage((message) => {
       if (message.message && typeof message.message === 'string') {
         try {
           const parsed = JSON.parse(message.message);
           if (parsed.type === 'user-joined' && parsed.user) {
-            console.log(`[WebRTC] User joined message: ${parsed.user.id}`);
+            console.log('[WebRTC] user-joined message', parsed.user.id);
           }
         } catch (e) {}
       }
     });
 
-    console.log('[WebRTC] Socket callbacks registered successfully');
+    console.log('[WebRTC] Socket callbacks registered');
   }
 
   async initializePeerConnection(peerId: string, isInitiator: boolean = false): Promise<RTCPeerConnection> {
-    console.log(`[WebRTC] Initializing peer connection with ${peerId}, isInitiator: ${isInitiator}, isHost: ${this.isHost}`);
-
-    const existingPeer = this.peers.get(peerId);
-    if (existingPeer) {
-      console.log(`[WebRTC] Peer connection already exists for ${peerId}, returning existing connection`);
-      if (this.isHost && isInitiator && !existingPeer.dataChannel) {
-        console.log(`[WebRTC] Host creating data channel for existing peer ${peerId}`);
-        const dataChannel = existingPeer.pc.createDataChannel('video-chunks', {
-          ordered: true,
-          maxRetransmits: 3
-        });
-        existingPeer.dataChannel = dataChannel;
-        this.setupDataChannel(peerId, dataChannel, true);
+    const existing = this.peers.get(peerId);
+    if (existing) {
+      // ensure data channel exists for host initiator case
+      if (this.isHost && isInitiator && !existing.dataChannel) {
+        try {
+          const dc = existing.pc.createDataChannel('video-chunks', { ordered: true, maxRetransmits: 3 });
+          existing.dataChannel = dc;
+          this.setupDataChannel(peerId, dc, true);
+        } catch (e) {}
       }
-      return existingPeer.pc;
+      return existing.pc;
     }
 
-    const configuration = {
+    const configuration: RTCConfiguration = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
@@ -201,32 +202,33 @@ class WebRTCManager {
       connectionState: 'new'
     };
 
+    // Add local tracks (camera/mic) if present
     if (this.localStream) {
-      console.log(`[WebRTC] Adding local stream tracks to peer ${peerId}`);
       this.localStream.getTracks().forEach(track => {
         try { pc.addTrack(track, this.localStream!); } catch (e) {}
       });
     }
 
+    // Add file/screen stream tracks if present
     if (this.fileStream) {
-      console.log(`[WebRTC] Adding file stream tracks to peer ${peerId}`);
-      this.addOrReplaceTracks(pc, this.fileStream);
+      try {
+        this.addOrReplaceTracks(pc, this.fileStream);
+      } catch (e) {
+        console.warn('[WebRTC] addOrReplaceTracks failed during init', e);
+      }
     }
 
     if (this.isHost && isInitiator) {
-      console.log(`[WebRTC] Host creating data channel for peer ${peerId}`);
-      const dataChannel = pc.createDataChannel('video-chunks', {
-        ordered: true,
-        maxRetransmits: 3
-      });
-      peer.dataChannel = dataChannel;
-      this.setupDataChannel(peerId, dataChannel, true);
+      try {
+        const dataChannel = pc.createDataChannel('video-chunks', { ordered: true, maxRetransmits: 3 });
+        peer.dataChannel = dataChannel;
+        this.setupDataChannel(peerId, dataChannel, true);
+      } catch (e) {}
     } else if (!this.isHost) {
       pc.ondatachannel = (event) => {
-        console.log(`[WebRTC] Receiver received data channel from peer ${peerId}`);
-        const dataChannel = event.channel;
-        peer.dataChannel = dataChannel;
-        this.setupDataChannel(peerId, dataChannel, false);
+        const dc = event.channel;
+        peer.dataChannel = dc;
+        this.setupDataChannel(peerId, dc, false);
       };
     }
 
@@ -237,7 +239,6 @@ class WebRTCManager {
     };
 
     pc.ontrack = (event) => {
-      console.log(`[WebRTC] Received media stream from peer ${peerId}`);
       peer.stream = event.streams[0];
       if (this.videoElement) {
         try {
@@ -246,7 +247,7 @@ class WebRTCManager {
           (this.videoElement as any).playsInline = true;
           this.videoElement.play().catch(() => {});
         } catch (e) {
-          console.error('[WebRTC] Error attaching remote stream to video element:', e);
+          console.error('[WebRTC] error attaching remote stream to video element', e);
         }
       } else {
         this.onStreamReceived(peerId, event.streams[0]);
@@ -256,30 +257,23 @@ class WebRTCManager {
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       peer.connectionState = state;
-      console.log(`[WebRTC] Peer ${peerId} connection state changed to: ${state}`);
-
       if (state === 'connected') {
         peer.isConnected = true;
-        console.log(`[WebRTC] ✅ Peer ${peerId} connected successfully!`);
       } else if (state === 'failed' || state === 'disconnected') {
         peer.isConnected = false;
-        console.log(`[WebRTC] ❌ Peer ${peerId} disconnected: ${state}`);
         this.removePeer(peerId);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log(`[WebRTC] Peer ${peerId} ICE connection state: ${pc.iceConnectionState}`);
+      // nothing extra here, but useful for debugging
     };
 
     this.peers.set(peerId, peer);
-    console.log(`[WebRTC] Peer connection initialized for ${peerId}`);
     return pc;
   }
 
   private setupDataChannel(peerId: string, dataChannel: RTCDataChannel, isHost: boolean) {
-    console.log(`[WebRTC] Setting up data channel for peer ${peerId}, isHost: ${isHost}`);
-
     try {
       (dataChannel as any).binaryType = 'arraybuffer';
     } catch (e) {}
@@ -287,24 +281,21 @@ class WebRTCManager {
     try { (dataChannel as any).bufferedAmountLowThreshold = 1024 * 1024; } catch {}
 
     dataChannel.onopen = () => {
-      console.log(`[WebRTC] ✅ Data channel opened for peer ${peerId}`);
-      const peer = this.peers.get(peerId);
-      if (peer) peer.isConnected = true;
+      const p = this.peers.get(peerId);
+      if (p) p.isConnected = true;
       this.flushSendQueue(peerId);
     };
 
     dataChannel.onclose = () => {
-      console.log(`[WebRTC] Data channel closed for peer ${peerId}`);
-      const peer = this.peers.get(peerId);
-      if (peer) peer.isConnected = false;
+      const p = this.peers.get(peerId);
+      if (p) p.isConnected = false;
     };
 
     dataChannel.onerror = (e) => {
-      console.error(`[WebRTC] Data channel error for peer ${peerId}:`, e);
-      const peer = this.peers.get(peerId);
-      if (peer) {
-        peer.isConnected = false;
-        peer.connectionState = 'failed';
+      const p = this.peers.get(peerId);
+      if (p) {
+        p.isConnected = false;
+        p.connectionState = 'failed';
       }
     };
 
@@ -312,34 +303,24 @@ class WebRTCManager {
       dataChannel.onmessage = (event) => {
         const payload = event.data;
         if (payload instanceof ArrayBuffer) {
-          // Binary chunk for file assembly (simple protocol: assign to current active incoming file)
           this.handleIncomingFileChunk(peerId, payload);
         } else if (payload instanceof Blob) {
-          payload.arrayBuffer().then((buf) => this.handleIncomingFileChunk(peerId, buf)).catch((e) => console.error('[WebRTC] Blob->ArrayBuffer conversion error', e));
+          payload.arrayBuffer().then((buf) => this.handleIncomingFileChunk(peerId, buf)).catch(() => {});
         } else if (typeof payload === 'string') {
-          // Control messages: file-start / file-end
           try {
             const parsed = JSON.parse(payload);
             if (parsed.type === 'file-start') {
-              console.log(`[WebRTC] [RECEIVER] file-start received for fileId=${parsed.fileId}, name=${parsed.name}`);
               this.incomingFiles.set(parsed.fileId, { chunks: [], totalChunks: parsed.totalChunks, metadata: parsed });
             } else if (parsed.type === 'file-end') {
-              console.log(`[WebRTC] [RECEIVER] file-end received for fileId=${parsed.fileId}`);
-              // assemble file
               this.finishIncomingFile(parsed.fileId);
-            } else {
-              // ignore other control messages for now
             }
           } catch (e) {
-            console.warn('[WebRTC] [RECEIVER] Received a non-JSON string on data channel', payload);
+            // ignore non-json strings
           }
-        } else {
-          console.log(`[WebRTC] [RECEIVER] Received unknown data type from ${peerId}`, payload);
         }
       };
     } else {
       dataChannel.onbufferedamountlow = () => {
-        // flushing queued chunks for host
         this.flushSendQueue(peerId);
       };
     }
@@ -353,17 +334,18 @@ class WebRTCManager {
     const newAudio = stream.getAudioTracks()[0];
 
     if (newVideo) {
-      if (currentVideo) {
-        try { currentVideo.replaceTrack(newVideo); } catch (e) { console.warn('replaceTrack video failed', e); }
+      if (currentVideo && currentVideo.track) {
+        try { currentVideo.replaceTrack(newVideo); } catch (e) { try { pc.addTrack(newVideo, stream); } catch {} }
       } else {
-        try { pc.addTrack(newVideo, stream); } catch (e) { console.warn('addTrack video failed', e); }
+        try { pc.addTrack(newVideo, stream); } catch (e) {}
       }
     }
+
     if (newAudio) {
-      if (currentAudio) {
-        try { currentAudio.replaceTrack(newAudio); } catch (e) { console.warn('replaceTrack audio failed', e); }
+      if (currentAudio && currentAudio.track) {
+        try { currentAudio.replaceTrack(newAudio); } catch (e) { try { pc.addTrack(newAudio, stream); } catch {} }
       } else {
-        try { pc.addTrack(newAudio, stream); } catch (e) { console.warn('addTrack audio failed', e); }
+        try { pc.addTrack(newAudio, stream); } catch (e) {}
       }
     }
   }
@@ -371,7 +353,6 @@ class WebRTCManager {
   private enqueueChunk(peerId: string, chunk: ArrayBuffer) {
     const peer = this.peers.get(peerId);
     if (!peer || !peer.dataChannel) return;
-
     const dc = peer.dataChannel;
     if (dc.readyState !== 'open' || !peer.isConnected) {
       const q = this.sendQueues.get(peerId) || [];
@@ -379,21 +360,18 @@ class WebRTCManager {
       this.sendQueues.set(peerId, q);
       return;
     }
-
     if (dc.bufferedAmount + chunk.byteLength > WebRTCManager.MAX_BUFFERED_AMOUNT) {
       const q = this.sendQueues.get(peerId) || [];
       q.push(chunk);
       this.sendQueues.set(peerId, q);
       return;
     }
-
     try {
       dc.send(chunk);
     } catch (e) {
       const q = this.sendQueues.get(peerId) || [];
       q.push(chunk);
       this.sendQueues.set(peerId, q);
-      console.error(`[WebRTC] [HOST] Error sending chunk directly to ${peerId}, queued:`, e);
     }
   }
 
@@ -408,19 +386,16 @@ class WebRTCManager {
 
     while (queue.length > 0) {
       const next = queue[0];
-      if (dc.bufferedAmount + next.byteLength > WebRTCManager.MAX_BUFFERED_AMOUNT) {
-        break;
-      }
+      if (dc.bufferedAmount + next.byteLength > WebRTCManager.MAX_BUFFERED_AMOUNT) break;
       try {
         dc.send(next);
         queue.shift();
       } catch (e) {
-        console.error(`[WebRTC] [HOST] Error flushing send queue to ${peerId}:`, e);
         break;
       }
     }
 
-    if (queue.length === 0) {
+    if (!queue || queue.length === 0) {
       this.sendQueues.delete(peerId);
     } else {
       this.sendQueues.set(peerId, queue);
@@ -432,19 +407,15 @@ class WebRTCManager {
     const targetIds = participantUserIds.filter(id => id && id !== currentUserId);
     targetIds.forEach(id => {
       if (!this.peers.has(id)) {
-        console.log(`[WebRTC] [HOST] Ensuring connection to ${id}`);
-        this.createOffer(id);
+        setTimeout(() => {
+          this.createOffer(id).catch(() => {});
+        }, 500);
       }
     });
   }
 
   private async handleOffer(from: string, offer: RTCSessionDescriptionInit) {
-    console.log(`[WebRTC][Non-Host] Offer received from host (${from}), isHost: ${this.isHost}`);
-    if (this.isHost) {
-      console.warn(`[WebRTC] Host received offer, ignoring`);
-      return;
-    }
-
+    if (this.isHost) return;
     const pc = await this.initializePeerConnection(from, false);
     try {
       await pc.setRemoteDescription(offer);
@@ -452,96 +423,59 @@ class WebRTCManager {
       await pc.setLocalDescription(answer);
       socketManager.sendAnswer(answer, from);
     } catch (error) {
-      console.error('[WebRTC][Non-Host] Error handling offer:', error);
+      console.error('[WebRTC] Error handling offer', error);
     }
   }
 
   private async handleAnswer(from: string, answer: RTCSessionDescriptionInit) {
-    console.log(`[WebRTC][Host] Answer received from peer (${from}), isHost: ${this.isHost}`);
-    if (!this.isHost) {
-      console.warn(`[WebRTC] Non-host received answer, ignoring`);
-      return;
-    }
-
+    if (!this.isHost) return;
     const peer = this.peers.get(from);
-    if (peer) {
-      try {
-        if (peer.pc.signalingState === 'stable') {
-          console.log(`[WebRTC][Host] Connection already stable, ignoring answer from ${from}`);
-          return;
-        }
-
-        await peer.pc.setRemoteDescription(answer);
-        console.log(`[WebRTC][Host] Answer processed for peer ${from}`);
-      } catch (error) {
-        console.error('[WebRTC][Host] Error handling answer:', error);
-      }
-    } else {
-      console.warn(`[WebRTC][Host] No peer found for ${from}`);
+    if (!peer) return;
+    try {
+      await peer.pc.setRemoteDescription(answer);
+    } catch (error) {
+      console.error('[WebRTC] Error handling answer', error);
     }
   }
 
   private async handleIceCandidate(from: string, candidate: RTCIceCandidateInit) {
-    console.log(`[WebRTC] ICE candidate received from ${from}, isHost: ${this.isHost}`);
     const peer = this.peers.get(from);
-    if (peer) {
-      try {
-        await peer.pc.addIceCandidate(candidate);
-        console.log(`[WebRTC] ICE candidate added for peer ${from}`);
-      } catch (error) {
-        console.error('[WebRTC] Error adding ICE candidate:', error);
-      }
-    } else {
-      console.warn(`[WebRTC] No peer found for ICE candidate from ${from}`);
+    if (!peer) return;
+    try {
+      await peer.pc.addIceCandidate(candidate);
+    } catch (error) {
+      console.error('[WebRTC] Error adding ICE candidate', error);
     }
   }
 
   private handlePeerJoined(peerId: string) {
-    console.log(`[WebRTC] Peer ${peerId} joined the room, isHost: ${this.isHost}`);
     if (this.isHost) {
       setTimeout(() => {
-        this.createOffer(peerId);
+        this.createOffer(peerId).catch(() => {});
       }, 1000);
-    } else {
-      console.log(`[WebRTC] Non-host user, waiting for offer from host`);
     }
   }
 
   private handlePeerLeft(peerId: string) {
-    console.log(`[WebRTC] Peer ${peerId} left the room`);
     this.removePeer(peerId);
   }
 
   async createOffer(peerId: string): Promise<RTCSessionDescriptionInit> {
-    console.log(`[WebRTC][Host] Creating offer for peer ${peerId}, isHost: ${this.isHost}`);
-    if (!this.isHost) {
-      console.warn(`[WebRTC] Non-host user trying to create offer, ignoring`);
-      return {} as RTCSessionDescriptionInit;
-    }
-
-    const existingPeer = this.peers.get(peerId);
-    if (existingPeer) {
-      const state = existingPeer.pc.signalingState;
-      if (state === 'have-local-offer') {
-        const existingOffer = existingPeer.pc.localDescription;
-        if (existingOffer) {
-          socketManager.sendOffer(existingOffer, peerId);
-          return existingOffer;
-        }
-      }
+    if (!this.isHost) return {} as RTCSessionDescriptionInit;
+    const existing = this.peers.get(peerId);
+    if (existing) {
+      const state = existing.pc.signalingState;
       if (state !== 'stable') {
         try {
-          const offer = await existingPeer.pc.createOffer({ iceRestart: true });
-          await existingPeer.pc.setLocalDescription(offer);
+          const offer = await existing.pc.createOffer({ iceRestart: true });
+          await existing.pc.setLocalDescription(offer);
           socketManager.sendOffer(offer, peerId);
           return offer;
         } catch (e) {
-          console.warn(`[WebRTC][Host] Failed to refresh offer for ${peerId}`, e);
           return {} as RTCSessionDescriptionInit;
         }
       }
     }
-
     const pc = await this.initializePeerConnection(peerId, true);
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -551,79 +485,68 @@ class WebRTCManager {
 
   async startLocalStream(constraints: MediaStreamConstraints = { video: true, audio: true }): Promise<MediaStream> {
     try {
-      console.log('[WebRTC] Starting local media stream');
       this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('[WebRTC] ✅ Local media stream started');
       return this.localStream;
     } catch (error) {
-      console.error('[WebRTC] Error accessing media devices:', error);
       throw error;
     }
   }
 
   async startScreenShare(): Promise<MediaStream> {
     try {
-      console.log('[WebRTC] Starting screen share');
-      this.screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true
-      });
+      this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      this.fileStream = this.screenStream;
 
-      // Replace video track in all peer connections
+      // Replace video track for each peer
       this.peers.forEach(peer => {
         const senders = peer.pc.getSenders();
-        const videoSender = senders.find(sender => sender.track?.kind === 'video');
+        const videoSender = senders.find(s => s.track?.kind === 'video');
+        const audioSender = senders.find(s => s.track?.kind === 'audio');
         if (videoSender && this.screenStream) {
           const videoTrack = this.screenStream.getVideoTracks()[0];
-          try { videoSender.replaceTrack(videoTrack); } catch (e) { console.warn('replaceTrack screen failed', e); }
-          console.log(`[WebRTC] Replaced video track for peer ${peer.id}`);
+          try { videoSender.replaceTrack(videoTrack); } catch (e) { try { peer.pc.addTrack(videoTrack, this.screenStream!); } catch {} }
+        }
+        if (audioSender && this.screenStream && this.screenStream.getAudioTracks().length > 0) {
+          const audioTrack = this.screenStream.getAudioTracks()[0];
+          try { audioSender.replaceTrack(audioTrack); } catch (e) { try { peer.pc.addTrack(audioTrack, this.screenStream!); } catch {} }
         }
       });
 
-      // Also set as fileStream so logic that expects fileStream can treat screen-share similarly
-      this.fileStream = this.screenStream;
-
-      // Renegotiate with all peers
+      // Renegotiate
       this.peers.forEach(async (peer) => {
         try {
           await this.createOffer(peer.id);
-        } catch (e) {
-          console.warn(`[WebRTC] Failed to renegotiate after starting screen share for ${peer.id}`, e);
-        }
+        } catch (e) {}
       });
 
-      console.log('[WebRTC] ✅ Screen share started');
       return this.screenStream;
     } catch (error) {
-      console.error('[WebRTC] Error starting screen share:', error);
       throw error;
     }
   }
 
   stopScreenShare() {
     if (this.screenStream) {
-      console.log('[WebRTC] Stopping screen share');
-      this.screenStream.getTracks().forEach(track => track.stop());
-      this.screenStream = null;
-      // Don't automatically clear fileStream if it was a previously selected file; clearing helps avoid stale references
+      try {
+        this.screenStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+      } catch (e) {}
+      // only clear fileStream if it is the screenStream reference
       if (this.fileStream && this.fileStream === this.screenStream) {
         this.fileStream = null;
       }
+      this.screenStream = null;
     }
   }
 
-  // === New: stopFileStream() used when host switches files ===
   public stopFileStream() {
-    console.log('[WebRTC] stopFileStream called - cleaning previous file transfer / capture');
-    // Stop capture stream if it was used
+    // Stop any existing file/screen transfer
     if (this.fileStream) {
       try {
-        this.fileStream.getTracks().forEach(t => { try { t.stop(); } catch (e) {} });
+        this.fileStream.getTracks().forEach(t => { try { t.stop(); } catch {} });
       } catch (e) {}
       this.fileStream = null;
     }
 
-    // revoke object URL if any
     if (this.currentVideoObjectUrl) {
       try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch (e) {}
       this.currentVideoObjectUrl = null;
@@ -631,73 +554,59 @@ class WebRTCManager {
 
     this.currentVideoFile = null;
     this.isSendingFile = false;
-    // reset any pending incoming file structures on receivers (they will be cleared on next file-start/file-end)
     this.incomingFiles.clear();
-
-    // clear send queues
+    this.prebufferChunks = [];
     this.sendQueues.clear();
   }
 
-  // Video streaming with chunking + safer fallback
   async streamVideoFile(file: File, videoElement: HTMLVideoElement) {
-    console.log(`[WebRTC] 🎬 Starting video streaming: ${file.name} (${file.size} bytes)`);
-
-    // If previously streaming, stop it first
-    try {
-      this.stopFileStream();
-    } catch (e) {
-      console.warn('[WebRTC] Error while stopping previous file stream', e);
-    }
+    // Stop previous file stream cleanly
+    try { this.stopFileStream(); } catch (e) {}
 
     this.currentVideoFile = file;
     this.videoElement = videoElement;
 
-    // Store metadata
-    const metadata = { name: file.name, size: file.size, type: file.type };
-
-    // Preferred path: captureStream from a playing <video> element (low-latency, preserves audio)
-    const videoUrl = URL.createObjectURL(file);
-    this.currentVideoObjectUrl = videoUrl;
-    videoElement.src = videoUrl;
-
+    // Create object URL and assign to host's video element
     try {
-      // Try to play (some browsers require user gesture, but host likely initiated)
-      await videoElement.play().catch(() => {});
+      const videoUrl = URL.createObjectURL(file);
+      this.currentVideoObjectUrl = videoUrl;
+      videoElement.src = videoUrl;
+      // Ensure host audio is unmuted so captureStream may include audio
+      try { videoElement.muted = false; } catch (e) {}
+      try {
+        await videoElement.play().catch(() => {});
+      } catch (e) {}
+
+      // Try captureStream (preferred)
       const capture = (videoElement as any).captureStream?.() || (videoElement as any).mozCaptureStream?.();
       if (capture && capture.getTracks().length > 0) {
-        // use captureStream path
         this.fileStream = capture as MediaStream;
-        console.log('[WebRTC] ✅ Using captureStream for file playback');
 
-        // Replace tracks on peers
+        // Replace tracks on all peers
         this.peers.forEach(peer => {
-          this.addOrReplaceTracks(peer.pc, this.fileStream!);
-        });
-
-        // Renegotiate so remote gets the new track
-        this.peers.forEach(async (peer) => {
           try {
-            await this.createOffer(peer.id);
-          } catch (e) {
-            console.warn(`[WebRTC] Failed to renegotiate after adding file stream for ${peer.id}`, e);
-          }
+            this.addOrReplaceTracks(peer.pc, this.fileStream!);
+          } catch (e) {}
         });
 
-        // done (live capture)
+        // Renegotiate
+        this.peers.forEach(async (peer) => {
+          try { await this.createOffer(peer.id); } catch (e) {}
+        });
+
         return;
       } else {
+        // If captureStream not available or no tracks, fall back to data-channel transfer
         console.warn('[WebRTC] captureStream not available or no tracks; falling back to data-channel transfer');
       }
     } catch (e) {
-      console.warn('[WebRTC] Error enabling captureStream; falling back to data-channel transfer:', e);
+      console.warn('[WebRTC] Error during captureStream attempt, falling back to data-channel', e);
     }
 
-    // Fallback: transfer the whole file via data channels (host -> peers), then receivers construct a Blob and set video.src
-    // Create a fileId to identify this transfer
+    // Fallback: data-channel transfer of the file
     const fileId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     this.totalChunksExpected = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Inform peers about incoming file
     this.peers.forEach(peer => {
       if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
         try {
@@ -709,48 +618,32 @@ class WebRTCManager {
             mime: file.type,
             totalChunks: this.totalChunksExpected
           }));
-        } catch (e) {
-          console.warn('[WebRTC] Failed to send file-start to', peer.id, e);
-        }
-      } else {
-        console.log(`[WebRTC] [HOST] Peer ${peer.id} has no open dataChannel yet - file-start deferred`);
+        } catch (e) {}
       }
     });
 
     this.isSendingFile = true;
-
     let chunksSent = 0;
     const start = () => readFileInChunks(file, (chunk, offset, sequence) => {
       chunksSent++;
-      // Send the ArrayBuffer chunk to all peers via enqueueChunk (which respects backpressure)
       this.peers.forEach(peer => {
         this.enqueueChunk(peer.id, chunk);
       });
     }, () => {
-      // Send file-end control
       this.peers.forEach(peer => {
         if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
           try {
-            peer.dataChannel.send(JSON.stringify({
-              type: 'file-end',
-              fileId
-            }));
-          } catch (e) {
-            console.warn('[WebRTC] Failed to send file-end to', peer.id, e);
-          }
+            peer.dataChannel.send(JSON.stringify({ type: 'file-end', fileId }));
+          } catch (e) {}
         }
       });
       this.isSendingFile = false;
-      console.log(`[WebRTC] [HOST] ✅ All ${chunksSent} chunks sent for fileId=${fileId}`);
     });
 
-    // small delay to allow receivers bind
     setTimeout(start, 250);
   }
 
-  // Helper used by the fallback assembly
   private handleIncomingFileChunk(peerId: string, chunk: ArrayBuffer) {
-    // Find a pending incoming file; pick first with chunks.length < totalChunks or no totalChunks yet
     const entryPair = Array.from(this.incomingFiles.entries()).find(([id, entry]) => {
       if (!entry.totalChunks) return true;
       return entry.chunks.length < (entry.totalChunks || 0);
@@ -759,53 +652,33 @@ class WebRTCManager {
     if (entryPair) {
       const [fileId, entry] = entryPair;
       entry.chunks.push(chunk);
-      // Optionally log progress rarely
-      if (entry.chunks.length % 50 === 0) {
-        console.log(`[WebRTC] [RECEIVER] Received ${entry.chunks.length}/${entry.totalChunks || '?'} chunks for fileId=${fileId}`);
-      }
       return;
     }
 
-    // No incoming file set up — store as prebuffer fallback
+    // prebuffer fallback
     this.prebufferChunks.push(chunk);
-    console.warn('[WebRTC] Received chunk but no file-start seen yet - prebuffering');
   }
 
   private finishIncomingFile(fileId: string) {
     const entry = this.incomingFiles.get(fileId);
-    if (!entry) {
-      console.warn('[WebRTC] finishIncomingFile: no entry for', fileId);
-      return;
-    }
-
-    // Concatenate buffers into a single Blob
+    if (!entry) return;
     try {
       const blobParts: BlobPart[] = entry.chunks.map(ab => new Uint8Array(ab));
       const blob = new Blob(blobParts, { type: entry.metadata?.mime || 'video/mp4' });
 
-      // set on video element if bound
       if (this.videoElement) {
-        try {
-          // Revoke previous url to avoid leaks
-          if (this.currentVideoObjectUrl) {
-            try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch (e) {}
-            this.currentVideoObjectUrl = null;
-          }
-          const url = URL.createObjectURL(blob);
-          this.currentVideoObjectUrl = url;
-          // Prefer to set src directly
-          this.videoElement.src = url;
-          // Try muted autoplay to increase success chance
-          try {
-            this.videoElement.muted = true;
-            this.videoElement.play().catch(() => {});
-          } catch (e) {}
-          console.log('[WebRTC] [RECEIVER] Received file assembled and assigned to video element');
-        } catch (e) {
-          console.error('[WebRTC] [RECEIVER] Error assigning received video blob URL', e);
+        if (this.currentVideoObjectUrl) {
+          try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch {}
+          this.currentVideoObjectUrl = null;
         }
+        const url = URL.createObjectURL(blob);
+        this.currentVideoObjectUrl = url;
+        this.videoElement.src = url;
+        try {
+          this.videoElement.muted = true;
+          this.videoElement.play().catch(() => {});
+        } catch (e) {}
       } else {
-        // If no element yet, put in prebuffer (as ArrayBuffer)
         const reader = new FileReader();
         reader.onload = () => {
           const ab = reader.result as ArrayBuffer;
@@ -814,32 +687,35 @@ class WebRTCManager {
         reader.readAsArrayBuffer(blob);
       }
     } catch (e) {
-      console.error('[WebRTC] [RECEIVER] Error finishing incoming file', e);
+      console.error('[WebRTC] Error assembling incoming file', e);
     } finally {
       this.incomingFiles.delete(fileId);
     }
   }
 
   private onStreamReceived(peerId: string, stream: MediaStream) {
-    console.log(`[WebRTC] Received media stream from peer ${peerId}`);
+    // fallback display when UI hasn't bound element
     const videoElement = document.createElement('video');
     videoElement.srcObject = stream;
     videoElement.autoplay = true;
     videoElement.muted = true;
+    videoElement.playsInline = true;
+    videoElement.style.position = 'fixed';
+    videoElement.style.bottom = '8px';
+    videoElement.style.right = '8px';
+    videoElement.style.width = '180px';
+    videoElement.style.zIndex = '9999';
     document.body.appendChild(videoElement);
   }
 
   private removePeer(peerId: string) {
-    console.log(`[WebRTC] Removing peer ${peerId}`);
     const peer = this.peers.get(peerId);
     if (peer) {
       try { peer.pc.close(); } catch (e) {}
       this.peers.delete(peerId);
-      console.log(`[WebRTC] Peer ${peerId} removed`);
     }
   }
 
-  // Video control sync helpers (unchanged)
   syncVideoPlay(currentTime: number) {
     if (this.isHost && this.videoElement) {
       this.videoElement.currentTime = currentTime;
@@ -879,35 +755,20 @@ class WebRTCManager {
     }
   }
 
-  // Test helpers
   async testCreateConnection(peerId: string) {
-    console.log(`[WebRTC] Manual test: Creating connection with ${peerId}, isHost: ${this.isHost}`);
     if (this.isHost) {
       await this.createOffer(peerId);
-    } else {
-      console.log(`[WebRTC] Non-host waiting for host offer`);
     }
   }
 
   testConnection() {
-    console.log(`[WebRTC] Connection test - isHost: ${this.isHost}`);
-    console.log(`[WebRTC] Total peers: ${this.peers.size}`);
-    this.peers.forEach((peer, peerId) => {
-      console.log(`[WebRTC] Peer ${peerId}: connected=${peer.isConnected}, state=${peer.connectionState}, iceState=${peer.pc.iceConnectionState}`);
+    console.log('[WebRTC] Peers: ', this.peers.size);
+    this.peers.forEach((peer) => {
+      console.log(`[WebRTC] ${peer.id} connected=${peer.isConnected} state=${peer.connectionState}`);
     });
   }
 
-  testSignaling() {
-    console.log(`[WebRTC] Signaling test - isHost: ${this.isHost}`);
-    console.log(`[WebRTC] Socket callbacks registered: ${!!this.socketCallbacks}`);
-    if (this.socketCallbacks) {
-      console.log(`[WebRTC] Callbacks: offer=${!!this.socketCallbacks.offer}, answer=${!!this.socketCallbacks.answer}, ice=${!!this.socketCallbacks.iceCandidate}`);
-    }
-  }
-
   cleanup() {
-    console.log('[WebRTC] Cleaning up WebRTC manager');
-
     if (this.socketCallbacks) {
       socketManager.offWebRTCOffer(this.socketCallbacks.offer);
       socketManager.offWebRTCAnswer(this.socketCallbacks.answer);
@@ -917,29 +778,29 @@ class WebRTCManager {
     }
 
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      try { this.localStream.getTracks().forEach(t => t.stop()); } catch {}
       this.localStream = null;
     }
 
     if (this.screenStream) {
-      this.screenStream.getTracks().forEach(track => track.stop());
+      try { this.screenStream.getTracks().forEach(t => t.stop()); } catch {}
       this.screenStream = null;
     }
 
     if (this.fileStream) {
-      this.fileStream.getTracks().forEach(track => track.stop());
+      try { this.fileStream.getTracks().forEach(t => t.stop()); } catch {}
       this.fileStream = null;
     }
 
     this.peers.forEach(peer => {
-      try { peer.pc.close(); } catch (e) {}
+      try { peer.pc.close(); } catch {}
     });
     this.peers.clear();
 
     this.isHost = false;
     this.currentVideoFile = null;
     if (this.currentVideoObjectUrl) {
-      try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch (e) {}
+      try { URL.revokeObjectURL(this.currentVideoObjectUrl); } catch {}
       this.currentVideoObjectUrl = null;
     }
     this.videoElement = null;
@@ -947,13 +808,9 @@ class WebRTCManager {
     this.incomingFiles.clear();
     this.isSendingFile = false;
     this.sendQueues.clear();
-
     this.socketCallbacks = null;
-
-    console.log('[WebRTC] ✅ Cleanup completed');
   }
 
-  // Getters
   getPeers() {
     return Array.from(this.peers.values());
   }
@@ -986,9 +843,6 @@ class WebRTCManager {
       }))
     };
   }
-
-  // Expose totalChunksExpected for visibility in UI if desired
-  private totalChunksExpected = 0;
 }
 
 export const webrtcManager = new WebRTCManager();

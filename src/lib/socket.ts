@@ -1,4 +1,4 @@
-// lib/socket.ts
+
 import { io, Socket } from 'socket.io-client';
 import { getToken } from './auth';
 
@@ -70,6 +70,8 @@ export interface VideoMetadata {
   url: string;
 }
 
+type JoinRequest = { roomId: string; resolve?: (v?: any) => void; reject?: (e?: any) => void; attempts?: number; };
+
 class SocketManager {
   private socket: Socket | null = null;
   private isConnected = false;
@@ -82,79 +84,93 @@ class SocketManager {
   private roomInfoCallbacks: ((room: RoomInfo) => void)[] = [];
   private errorCallbacks: ((error: string) => void)[] = [];
 
-  // WebRTC specific callbacks
+  // WebRTC
   private webrtcOfferCallbacks: ((data: { from: string; offer: any }) => void)[] = [];
   private webrtcAnswerCallbacks: ((data: { from: string; answer: any }) => void)[] = [];
   private webrtcIceCandidateCallbacks: ((data: { from: string; candidate: any }) => void)[] = [];
   private webrtcPeerJoinedCallbacks: ((data: { peerId: string }) => void)[] = [];
   private webrtcPeerLeftCallbacks: ((data: { peerId: string }) => void)[] = [];
 
-  // Video state sync callbacks
+  // Video state sync
   private videoStateSyncCallbacks: ((data: any) => void)[] = [];
   private hostVideoStateRequestCallbacks: (() => void)[] = [];
 
-  // Pending signaling events if callbacks are not yet registered
+  // Pending signaling events
   private pendingOffers: { from: string; offer: any }[] = [];
   private pendingAnswers: { from: string; answer: any }[] = [];
   private pendingIceCandidates: { from: string; candidate: any }[] = [];
 
-  // New hooks
+  // Hooks
   private connectCallbacks: (() => void)[] = [];
   private authenticatedCallbacks: ((data: any) => void)[] = [];
+
+  // Join queue if join called before connection completes
+  private pendingJoin: JoinRequest | null = null;
 
   connect() {
     if (this.socket) return;
 
     this.socket = io(API_BASE_URL, {
       transports: ['websocket', 'polling'],
-      autoConnect: true
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
 
     this.socket.on('connect', () => {
-      console.log('Socket connected');
       this.isConnected = true;
+      console.log('[Socket] connected', this.socket?.id);
       this.authenticate();
-      // notify listeners that raw socket is connected
+
       this.connectCallbacks.forEach(cb => {
         try { cb(); } catch (e) { console.error('connect callback error', e); }
       });
+
+      // If there was a pending join request (called while disconnected), process it
+      if (this.pendingJoin) {
+        const pj = this.pendingJoin;
+        this.pendingJoin = null;
+        this.joinRoom(pj.roomId);
+      }
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('Socket disconnected');
+    this.socket.on('disconnect', (reason) => {
       this.isConnected = false;
+      console.log('[Socket] disconnected', reason);
     });
 
-    this.socket.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
+    this.socket.on('connect_error', (err) => {
+      console.error('[Socket] connect_error', err);
     });
 
     this.socket.on('authenticated', (data) => {
-      console.log('Socket authenticated:', data);
-      // notify authenticated listeners
+      console.log('[Socket] authenticated', data);
       this.authenticatedCallbacks.forEach(cb => {
         try { cb(data); } catch (e) { console.error('authenticated callback error', e); }
       });
     });
 
     this.socket.on('auth-error', (data) => {
-      console.error('Socket auth error:', data);
-      this.errorCallbacks.forEach(callback => callback(data.error));
+      console.error('[Socket] auth-error', data);
+      this.errorCallbacks.forEach(cb => cb(data.error || 'Authentication error'));
     });
 
     this.socket.on('room-joined', (data) => {
-      console.log('Room joined:', data);
-      this.roomInfoCallbacks.forEach(callback => callback(data.room));
+      console.log('[Socket] room-joined', data);
+      this.roomId = data.room?.id || this.roomId;
+      this.roomInfoCallbacks.forEach(cb => cb(data.room));
     });
 
     this.socket.on('user-joined', (data) => {
-      console.log('User joined:', data);
-      this.participantCallbacks.forEach(callback => callback(data.participants));
-      // convert to chat-like message for other systems
+      console.log('[Socket] user-joined', data);
+      if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants));
+      // convert to chat-like message for local UIs
       this.messageCallbacks.forEach(callback => {
         callback({
-          id: Date.now().toString(),
-          user: { id: data.userId || (data.user && data.user.id) || '', name: (data.user && data.user.name) || '', picture: (data.user && data.user.picture) || '' },
+          id: `join-${Date.now()}-${Math.random()}`,
+          user: { id: data.userId || '', name: data.user?.name || '', picture: data.user?.picture || '' },
           message: JSON.stringify({ type: 'user-joined', user: data.user }),
           timestamp: new Date().toISOString(),
           isPrivate: false,
@@ -164,404 +180,280 @@ class SocketManager {
     });
 
     this.socket.on('user-left', (data) => {
-      console.log('User left:', data);
-      this.participantCallbacks.forEach(callback => callback(data.participants));
+      console.log('[Socket] user-left', data);
+      if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants));
     });
 
     this.socket.on('chat-message', (message: SocketMessage) => {
-      console.log('Chat message received:', message);
-      const processedMessage: SocketMessage = {
+      this.messageCallbacks.forEach(cb => cb({
         ...message,
         id: message.id || `chat-${Date.now()}-${Math.random()}`,
-        timestamp: message.timestamp || new Date().toLocaleTimeString()
-      };
-      this.messageCallbacks.forEach(callback => callback(processedMessage));
+        timestamp: message.timestamp || new Date().toISOString()
+      }));
     });
 
     this.socket.on('video-play', (data) => {
-      console.log('Video play event:', data);
-      this.videoControlCallbacks.forEach(callback => callback({ type: 'play', ...data }));
+      this.videoControlCallbacks.forEach(cb => cb({ type: 'play', ...data }));
     });
 
     this.socket.on('video-pause', (data) => {
-      console.log('Video pause event:', data);
-      this.videoControlCallbacks.forEach(callback => callback({ type: 'pause', ...data }));
+      this.videoControlCallbacks.forEach(cb => cb({ type: 'pause', ...data }));
     });
 
     this.socket.on('video-seek', (data) => {
-      console.log('Video seek event:', data);
-      this.videoControlCallbacks.forEach(callback => callback({ type: 'seek', ...data }));
+      this.videoControlCallbacks.forEach(cb => cb({ type: 'seek', ...data }));
     });
 
     this.socket.on('video-metadata', (metadata: VideoMetadata) => {
-      console.log('Video metadata received:', metadata);
-      this.videoMetadataCallbacks.forEach(callback => callback(metadata));
+      this.videoMetadataCallbacks.forEach(cb => cb(metadata));
     });
 
-    this.socket.on('video-state-sync', (data) => {
-      console.log('Video state sync received:', data);
-      this.videoStateSyncCallbacks.forEach(callback => callback(data));
+    this.socket.on('video-state-sync', (payload) => {
+      // server emits video-state-sync (room broadcast from host)
+      this.videoStateSyncCallbacks.forEach(cb => cb(payload));
     });
 
-    this.socket.on('host-video-state-request', (data) => {
-      console.log('Host video state request received:', data);
-      this.hostVideoStateRequestCallbacks.forEach(callback => callback());
+    this.socket.on('host-video-state-request', (payload) => {
+      // host should respond with video-state-sync
+      this.hostVideoStateRequestCallbacks.forEach(cb => cb());
     });
 
     this.socket.on('voice-message', (data) => {
-      console.log('Voice message received:', data);
       const voiceMessage: SocketMessage = {
         id: `voice-${Date.now()}-${Math.random()}`,
         user: data.message?.user || { id: 'unknown', name: 'Unknown', picture: '' },
         message: 'Voice Message',
-        timestamp: data.message?.timestamp || new Date().toLocaleTimeString(),
+        timestamp: data.message?.timestamp || new Date().toISOString(),
         isPrivate: data.message?.isPrivate || false,
         type: 'voice',
         audioUrl: data.message?.audioUrl,
         duration: data.message?.duration || 0
       };
-      this.messageCallbacks.forEach(callback => callback(voiceMessage));
+      this.messageCallbacks.forEach(cb => cb(voiceMessage));
     });
 
-    // WebRTC signaling events
+    // WebRTC signaling
     this.socket.on('offer', (data) => {
-      console.log('WebRTC offer received:', data);
       if (this.webrtcOfferCallbacks.length > 0) {
-        this.webrtcOfferCallbacks.forEach(callback => callback({ from: data.from, offer: data.offer }));
+        this.webrtcOfferCallbacks.forEach(cb => cb({ from: data.from, offer: data.offer }));
       } else {
-        console.warn('[Socket] No WebRTC offer listeners yet; queueing offer');
         this.pendingOffers.push({ from: data.from, offer: data.offer });
       }
     });
 
     this.socket.on('answer', (data) => {
-      console.log('WebRTC answer received:', data);
       if (this.webrtcAnswerCallbacks.length > 0) {
-        this.webrtcAnswerCallbacks.forEach(callback => callback({ from: data.from, answer: data.answer }));
+        this.webrtcAnswerCallbacks.forEach(cb => cb({ from: data.from, answer: data.answer }));
       } else {
-        console.warn('[Socket] No WebRTC answer listeners yet; queueing answer');
         this.pendingAnswers.push({ from: data.from, answer: data.answer });
       }
     });
 
     this.socket.on('ice-candidate', (data) => {
-      console.log('WebRTC ICE candidate received:', data);
       if (this.webrtcIceCandidateCallbacks.length > 0) {
-        this.webrtcIceCandidateCallbacks.forEach(callback => callback({ from: data.from, candidate: data.candidate }));
+        this.webrtcIceCandidateCallbacks.forEach(cb => cb({ from: data.from, candidate: data.candidate }));
       } else {
-        console.warn('[Socket] No WebRTC ICE listeners yet; queueing candidate');
         this.pendingIceCandidates.push({ from: data.from, candidate: data.candidate });
       }
     });
 
     this.socket.on('peer-joined', (data) => {
-      console.log('WebRTC peer joined:', data);
-      this.webrtcPeerJoinedCallbacks.forEach(callback => callback({ peerId: data.peerId }));
+      this.webrtcPeerJoinedCallbacks.forEach(cb => cb({ peerId: data.peerId }));
     });
 
     this.socket.on('peer-left', (data) => {
-      console.log('WebRTC peer left:', data);
-      this.webrtcPeerLeftCallbacks.forEach(callback => callback({ peerId: data.peerId }));
+      this.webrtcPeerLeftCallbacks.forEach(cb => cb({ peerId: data.peerId }));
     });
 
     this.socket.on('error', (data) => {
-      console.error('Socket error:', data);
-      this.errorCallbacks.forEach(callback => callback(data.error));
+      console.error('[Socket] server error', data);
+      this.errorCallbacks.forEach(cb => cb(data.error || 'Unknown socket error'));
     });
   }
 
   private authenticate() {
     const token = getToken();
-    if (token && this.socket) {
-      console.log('Authenticating socket with token...');
-      this.socket.emit('authenticate', { token });
-    } else {
-      console.error('No token available for socket authentication');
+    if (!token || !this.socket) {
+      console.warn('[Socket] No token available for socket authentication');
+      return;
     }
+    this.socket.emit('authenticate', { token });
   }
 
-  joinRoom(roomId: string) {
+  joinRoom(roomId: string): Promise<any> {
     if (!this.socket) {
-      console.error('Socket not initialized');
-      return;
+      // queue join until socket created/connected
+      this.pendingJoin = { roomId };
+      this.connect();
+      return Promise.resolve();
     }
 
     if (!this.isConnected) {
-      console.log('Socket not connected, waiting for connection...');
-      this.socket.once('connect', () => {
-        this.authenticate();
-        setTimeout(() => {
-          this.socket?.emit('join-room', { roomId });
-        }, 1000);
+      // attempt to join after connect; store pending join
+      return new Promise((resolve, reject) => {
+        this.pendingJoin = { roomId, resolve, reject, attempts: 0 };
+        // ensure connect called
+        this.connect();
       });
-      return;
     }
 
     this.roomId = roomId;
     this.socket.emit('join-room', { roomId });
+    return Promise.resolve();
   }
 
   leaveRoom() {
     if (!this.socket || !this.roomId) return;
-
     this.socket.emit('leave-room');
     this.roomId = null;
   }
 
   sendMessage(message: string, isPrivate: boolean = false) {
     if (!this.socket || !this.roomId) return;
-
-    this.socket.emit('chat-message', {
-      message,
-      isPrivate
-    });
+    this.socket.emit('chat-message', { message, isPrivate });
   }
 
-  // Video control events (host only)
   playVideo(currentTime?: number) {
     if (!this.socket || !this.roomId) return;
-
     this.socket.emit('video-play', { currentTime });
   }
 
   pauseVideo() {
     if (!this.socket || !this.roomId) return;
-
     this.socket.emit('video-pause');
   }
 
   seekVideo(time: number) {
     if (!this.socket || !this.roomId) return;
-
     this.socket.emit('video-seek', { time });
   }
 
-  // Video metadata (host only)
   sendVideoMetadata(metadata: VideoMetadata) {
     if (!this.socket || !this.roomId) return;
-
     this.socket.emit('video-metadata', metadata);
   }
 
-  // WebRTC signaling
-  sendOffer(offer: any, to: string) {
-    if (!this.socket) return;
-
-    console.log(`[Socket] Sending WebRTC offer to user ${to}`);
-    this.socket.emit('offer', { offer, to });
-  }
-
-  sendAnswer(answer: any, to: string) {
-    if (!this.socket) return;
-
-    console.log(`[Socket] Sending WebRTC answer to user ${to}`);
-    this.socket.emit('answer', { answer, to });
-  }
-
-  sendIceCandidate(candidate: any, to: string) {
-    if (!this.socket) return;
-
-    console.log(`[Socket] Sending WebRTC ICE candidate to user ${to}`);
-    this.socket.emit('ice-candidate', { candidate, to });
-  }
-
-  // Event listeners
-  onMessage(callback: (message: SocketMessage) => void) {
-    this.messageCallbacks.push(callback);
-  }
-
-  onParticipantsChange(callback: (participants: Participant[]) => void) {
-    this.participantCallbacks.push(callback);
-  }
-
-  onVideoControl(callback: (data: any) => void) {
-    this.videoControlCallbacks.push(callback);
-  }
-
-  onVideoMetadata(callback: (metadata: VideoMetadata) => void) {
-    this.videoMetadataCallbacks.push(callback);
-  }
-
-  onRoomInfo(callback: (room: RoomInfo) => void) {
-    this.roomInfoCallbacks.push(callback);
-  }
-
-  onError(callback: (error: string) => void) {
-    this.errorCallbacks.push(callback);
-  }
-
-  // WebRTC specific event listeners
-  onWebRTCOffer(callback: (data: { from: string; offer: any }) => void) {
-    console.log('[Socket] Registering WebRTC offer callback');
-    this.webrtcOfferCallbacks.push(callback);
-    // Drain pending offers
-    if (this.pendingOffers.length) {
-      const queued = this.pendingOffers.slice();
-      this.pendingOffers = [];
-      queued.forEach(data => {
-        try { callback({ from: data.from, offer: data.offer }); } catch (e) { console.error('[Socket] Error delivering pending offer', e); }
-      });
-    }
-  }
-
-  onWebRTCAnswer(callback: (data: { from: string; answer: any }) => void) {
-    console.log('[Socket] Registering WebRTC answer callback');
-    this.webrtcAnswerCallbacks.push(callback);
-    if (this.pendingAnswers.length) {
-      const queued = this.pendingAnswers.slice();
-      this.pendingAnswers = [];
-      queued.forEach(data => {
-        try { callback({ from: data.from, answer: data.answer }); } catch (e) { console.error('[Socket] Error delivering pending answer', e); }
-      });
-    }
-  }
-
-  onWebRTCIceCandidate(callback: (data: { from: string; candidate: any }) => void) {
-    console.log('[Socket] Registering WebRTC ICE candidate callback');
-    this.webrtcIceCandidateCallbacks.push(callback);
-    if (this.pendingIceCandidates.length) {
-      const queued = this.pendingIceCandidates.slice();
-      this.pendingIceCandidates = [];
-      queued.forEach(data => {
-        try { callback({ from: data.from, candidate: data.candidate }); } catch (e) { console.error('[Socket] Error delivering pending ICE candidate', e); }
-      });
-    }
-  }
-
-  onWebRTCPeerJoined(callback: (data: { peerId: string }) => void) {
-    this.webrtcPeerJoinedCallbacks.push(callback);
-  }
-
-  onWebRTCPeerLeft(callback: (data: { peerId: string }) => void) {
-    this.webrtcPeerLeftCallbacks.push(callback);
-  }
-
-  // Remove event listeners
-  offMessage(callback: (message: SocketMessage) => void) {
-    this.messageCallbacks = this.messageCallbacks.filter(cb => cb !== callback);
-  }
-
-  offParticipantsChange(callback: (participants: Participant[]) => void) {
-    this.participantCallbacks = this.participantCallbacks.filter(cb => cb !== callback);
-  }
-
-  offVideoControl(callback: (data: any) => void) {
-    this.videoControlCallbacks = this.videoControlCallbacks.filter(cb => cb !== callback);
-  }
-
-  offVideoMetadata(callback: (metadata: VideoMetadata) => void) {
-    this.videoMetadataCallbacks = this.videoMetadataCallbacks.filter(cb => cb !== callback);
-  }
-
-  offRoomInfo(callback: (room: RoomInfo) => void) {
-    this.roomInfoCallbacks = this.roomInfoCallbacks.filter(cb => cb !== callback);
-  }
-
-  offError(callback: (error: string) => void) {
-    this.errorCallbacks = this.errorCallbacks.filter(cb => cb !== callback);
-  }
-
-  // Remove WebRTC event listeners
-  offWebRTCOffer(callback: (data: { from: string; offer: any }) => void) {
-    this.webrtcOfferCallbacks = this.webrtcOfferCallbacks.filter(cb => cb !== callback);
-  }
-
-  offWebRTCAnswer(callback: (data: { from: string; answer: any }) => void) {
-    this.webrtcAnswerCallbacks = this.webrtcAnswerCallbacks.filter(cb => cb !== callback);
-  }
-
-  offWebRTCIceCandidate(callback: (data: { from: string; candidate: any }) => void) {
-    this.webrtcIceCandidateCallbacks = this.webrtcIceCandidateCallbacks.filter(cb => cb !== callback);
-  }
-
-  offWebRTCPeerJoined(callback: (data: { peerId: string }) => void) {
-    this.webrtcPeerJoinedCallbacks = this.webrtcPeerJoinedCallbacks.filter(cb => cb !== callback);
-  }
-
-  offWebRTCPeerLeft(callback: (data: { peerId: string }) => void) {
-    this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(cb => cb !== callback);
-  }
-
-  // Voice message methods
-  async sendVoiceMessage(audioBlob: Blob, duration: number, isPrivate: boolean, user: any) {
-    if (!this.socket || !this.roomId) return;
-
-    try {
-      const arrayBuffer = await audioBlob.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-      let binaryString = '';
-      for (let i = 0; i < uint8Array.length; i++) {
-        binaryString += String.fromCharCode(uint8Array[i]);
-      }
-      const base64Audio = btoa(binaryString);
-
-      const voiceMessage = {
-        type: 'voice',
-        audioUrl: `data:audio/webm;base64,${base64Audio}`,
-        duration: duration,
-        isPrivate: isPrivate,
-        timestamp: new Date().toLocaleTimeString(),
-        user: user
-      };
-
-      console.log('Sending voice message:', { duration, user: user.name, audioSize: base64Audio.length });
-
-      return new Promise((resolve, reject) => {
-        this.socket!.emit('voice-message', {
-          roomId: this.roomId,
-          message: voiceMessage
-        }, (ack: any) => {
-          if (ack && ack.success) {
-            console.log('Voice message sent successfully');
-            resolve(ack);
-          } else {
-            console.error('Voice message send failed:', ack);
-            reject(new Error('Voice message send failed'));
-          }
-        });
-
-        setTimeout(() => {
-          console.log('Voice message sent (fallback)');
-          resolve({ success: true });
-        }, 1000);
-      });
-    } catch (error) {
-      console.error('Error sending voice message:', error);
-      throw error;
-    }
-  }
-
-  // Video state sync methods
+  // Video state sync helpers
   sendVideoStateRequest() {
     if (!this.socket || !this.roomId) return;
-    console.log('Sending video state request');
     this.socket.emit('video-state-request', { roomId: this.roomId });
   }
 
   sendVideoStateSync(videoState: any) {
     if (!this.socket || !this.roomId) return;
-    console.log('Sending video state sync:', videoState);
-    this.socket.emit('video-state-sync', { 
-      roomId: this.roomId, 
-      videoState 
-    });
+    this.socket.emit('video-state-sync', { roomId: this.roomId, ...videoState });
   }
 
-  onVideoStateSync(callback: (data: any) => void) {
-    this.videoStateSyncCallbacks.push(callback);
+  // WebRTC signaling
+  sendOffer(offer: any, to: string) {
+    if (!this.socket) return;
+    this.socket.emit('offer', { offer, to });
   }
 
-  offVideoStateSync(callback: (data: any) => void) {
-    this.videoStateSyncCallbacks = this.videoStateSyncCallbacks.filter(cb => cb !== callback);
+  sendAnswer(answer: any, to: string) {
+    if (!this.socket) return;
+    this.socket.emit('answer', { answer, to });
   }
 
-  onHostVideoStateRequest(callback: () => void) {
-    this.hostVideoStateRequestCallbacks.push(callback);
+  sendIceCandidate(candidate: any, to: string) {
+    if (!this.socket) return;
+    this.socket.emit('ice-candidate', { candidate, to });
   }
 
-  offHostVideoStateRequest(callback: () => void) {
-    this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(cb => cb !== callback);
+  // Voice message (binary as base64)
+  async sendVoiceMessage(audioBlob: Blob, duration: number, isPrivate: boolean, user: any) {
+    if (!this.socket || !this.roomId) return;
+    try {
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < uint8Array.length; i++) binary += String.fromCharCode(uint8Array[i]);
+      const base64 = btoa(binary);
+
+      const voiceMessage = {
+        type: 'voice',
+        audioUrl: `data:audio/webm;base64,${base64}`,
+        duration,
+        isPrivate,
+        timestamp: new Date().toISOString(),
+        user
+      };
+
+      return new Promise((resolve, reject) => {
+        this.socket!.emit('voice-message', { roomId: this.roomId, message: voiceMessage }, (ack: any) => {
+          if (ack && ack.success) resolve(ack);
+          else reject(ack || new Error('Voice message failed'));
+        });
+
+        setTimeout(() => resolve({ success: true }), 1000);
+      });
+    } catch (error) {
+      console.error('[Socket] sendVoiceMessage error', error);
+      throw error;
+    }
   }
+
+  // Event subscription API
+  onMessage(cb: (m: SocketMessage) => void) { this.messageCallbacks.push(cb); }
+  offMessage(cb: (m: SocketMessage) => void) { this.messageCallbacks = this.messageCallbacks.filter(c => c !== cb); }
+
+  onParticipantsChange(cb: (p: Participant[]) => void) { this.participantCallbacks.push(cb); }
+  offParticipantsChange(cb: (p: Participant[]) => void) { this.participantCallbacks = this.participantCallbacks.filter(c => c !== cb); }
+
+  onVideoControl(cb: (d: any) => void) { this.videoControlCallbacks.push(cb); }
+  offVideoControl(cb: (d: any) => void) { this.videoControlCallbacks = this.videoControlCallbacks.filter(c => c !== cb); }
+
+  onVideoMetadata(cb: (m: VideoMetadata) => void) { this.videoMetadataCallbacks.push(cb); }
+  offVideoMetadata(cb: (m: VideoMetadata) => void) { this.videoMetadataCallbacks = this.videoMetadataCallbacks.filter(c => c !== cb); }
+
+  onRoomInfo(cb: (r: RoomInfo) => void) { this.roomInfoCallbacks.push(cb); }
+  offRoomInfo(cb: (r: RoomInfo) => void) { this.roomInfoCallbacks = this.roomInfoCallbacks.filter(c => c !== cb); }
+
+  onError(cb: (err: string) => void) { this.errorCallbacks.push(cb); }
+  offError(cb: (err: string) => void) { this.errorCallbacks = this.errorCallbacks.filter(c => c !== cb); }
+
+  // WebRTC event listeners (drain pending events)
+  onWebRTCOffer(cb: (d: { from: string; offer: any }) => void) {
+    this.webrtcOfferCallbacks.push(cb);
+    if (this.pendingOffers.length) {
+      const queued = this.pendingOffers.slice();
+      this.pendingOffers = [];
+      queued.forEach(it => { try { cb(it); } catch (e) { console.error('offer cb error', e); } });
+    }
+  }
+  offWebRTCOffer(cb: (d: { from: string; offer: any }) => void) { this.webrtcOfferCallbacks = this.webrtcOfferCallbacks.filter(c => c !== cb); }
+
+  onWebRTCAnswer(cb: (d: { from: string; answer: any }) => void) {
+    this.webrtcAnswerCallbacks.push(cb);
+    if (this.pendingAnswers.length) {
+      const queued = this.pendingAnswers.slice();
+      this.pendingAnswers = [];
+      queued.forEach(it => { try { cb(it); } catch (e) { console.error('answer cb error', e); } });
+    }
+  }
+  offWebRTCAnswer(cb: (d: { from: string; answer: any }) => void) { this.webrtcAnswerCallbacks = this.webrtcAnswerCallbacks.filter(c => c !== cb); }
+
+  onWebRTCIceCandidate(cb: (d: { from: string; candidate: any }) => void) {
+    this.webrtcIceCandidateCallbacks.push(cb);
+    if (this.pendingIceCandidates.length) {
+      const queued = this.pendingIceCandidates.slice();
+      this.pendingIceCandidates = [];
+      queued.forEach(it => { try { cb(it); } catch (e) { console.error('ice cb error', e); } });
+    }
+  }
+  offWebRTCIceCandidate(cb: (d: { from: string; candidate: any }) => void) { this.webrtcIceCandidateCallbacks = this.webrtcIceCandidateCallbacks.filter(c => c !== cb); }
+
+  onWebRTCPeerJoined(cb: (d: { peerId: string }) => void) { this.webrtcPeerJoinedCallbacks.push(cb); }
+  offWebRTCPeerJoined(cb: (d: { peerId: string }) => void) { this.webrtcPeerJoinedCallbacks = this.webrtcPeerJoinedCallbacks.filter(c => c !== cb); }
+
+  onWebRTCPeerLeft(cb: (d: { peerId: string }) => void) { this.webrtcPeerLeftCallbacks.push(cb); }
+  offWebRTCPeerLeft(cb: (d: { peerId: string }) => void) { this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(c => c !== cb); }
+
+  onVideoStateSync(cb: (d: any) => void) { this.videoStateSyncCallbacks.push(cb); }
+  offVideoStateSync(cb: (d: any) => void) { this.videoStateSyncCallbacks = this.videoStateSyncCallbacks.filter(c => c !== cb); }
+
+  onHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks.push(cb); }
+  offHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(c => c !== cb); }
 
   disconnect() {
     if (this.socket) {
@@ -572,22 +464,11 @@ class SocketManager {
     this.roomId = null;
   }
 
-  isSocketConnected() {
-    return this.isConnected;
-  }
+  isSocketConnected() { return this.isConnected; }
 
-  // New: onConnect / onAuthenticated hooks
-  onConnect(callback: () => void) {
-    this.connectCallbacks.push(callback);
-  }
-
-  onAuthenticated(callback: (data: any) => void) {
-    this.authenticatedCallbacks.push(callback);
-  }
-
-  offAuthenticated(callback: (data: any) => void) {
-    this.authenticatedCallbacks = this.authenticatedCallbacks.filter(cb => cb !== callback);
-  }
+  onConnect(cb: () => void) { this.connectCallbacks.push(cb); }
+  onAuthenticated(cb: (d: any) => void) { this.authenticatedCallbacks.push(cb); }
+  offAuthenticated(cb: (d: any) => void) { this.authenticatedCallbacks = this.authenticatedCallbacks.filter(c => c !== cb); }
 }
 
 export const socketManager = new SocketManager();
