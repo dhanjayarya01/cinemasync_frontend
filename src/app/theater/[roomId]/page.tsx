@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Monitor, Loader2, StopCircle,
-  Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2
+  Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2, X
 } from "lucide-react";
 
 import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket";
@@ -55,14 +55,20 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
 
+  // --- Voice message states (replaced by the working implementation) ---
   const [isRecording, setIsRecording] = useState(false);
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedDuration, setRecordedDuration] = useState<number>(0);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0); // seconds with decimals in earlier code; original used integer seconds in another file — keep seconds
+  const [playingVoiceMessages, setPlayingVoiceMessages] = useState<Set<string>>(new Set());
+  const [voiceMessageProgress, setVoiceMessageProgress] = useState<Map<string, number>>(new Map());
+  const [voiceMessageCurrentTime, setVoiceMessageCurrentTime] = useState<Map<string, number>>(new Map());
+  const [isSendingVoiceMessage, setIsSendingVoiceMessage] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<BlobPart[]>([]);
-  const recordedStreamRef = useRef<MediaStream | null>(null);
-  const recordingTimerRef = useRef<number | null>(null);
-  const recordingStartRef = useRef<number | null>(null);
+  const recordingIntervalRef = useRef<number | null>(null);
+  const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // --------------------------------------------------------------------
 
   const isHost = user?.id === roomInfo?.host?.id;
 
@@ -228,6 +234,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           if (webrtcManager.isHostUser()) webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
         });
 
+        // Message handling (handle voice dedup)
         socketManager.onMessage((msg) => {
           try {
             if (msg.message) {
@@ -473,7 +480,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (!videoRef.current) return;
     if (isHost) {
       const newMuted = !isMuted;
-      // mute only host local playback
+      
       webrtcManager.setLocalMuted(newMuted);
       setIsMuted(newMuted);
       return;
@@ -486,7 +493,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     const v = Number(e.target.value);
     setVolume(v);
     if (isHost) {
-      // host playback uses localPlaybackGain; also keep send volume at 1 by default
+      
       webrtcManager.setLocalVolume(v);
     } else if (videoRef.current) {
       videoRef.current.volume = v;
@@ -578,153 +585,207 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return `${mins}:${two(secs)}`;
   };
 
-  // Recording helpers
+
   const startRecording = async () => {
     try {
-      recordedChunksRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordedStreamRef.current = stream;
-      const options: MediaRecorderOptions = {};
-      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        options.mimeType = 'audio/webm;codecs=opus';
-      } else if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm')) {
-        options.mimeType = 'audio/webm';
-      }
-      const mr = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mr;
-      mr.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      const chunks: Blob[] = [];
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
       };
-      mr.onstop = async () => {
-        try {
-          const blob = new Blob(recordedChunksRef.current, { type: recordedChunksRef.current.length > 0 ? (recordedChunksRef.current[0] as any).type || 'audio/webm' : 'audio/webm' });
-          setRecordedBlob(blob);
-          // get duration reliably
-          const url = URL.createObjectURL(blob);
-          const a = new Audio(url);
-          a.preload = "metadata";
-          a.onloadedmetadata = () => {
-            const d = a.duration || 0;
-            setRecordedDuration(Math.round(d));
-            URL.revokeObjectURL(url);
-          };
-        } catch (e) {
-          setRecordedBlob(null);
-          setRecordedDuration(0);
-        } finally {
-          try { recordedStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
-          recordedStreamRef.current = null;
-          if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
-          recordingStartRef.current = null;
-        }
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        setAudioBlob(blob);
+        
+        try { stream.getTracks().forEach(track => track.stop()); } catch {}
       };
-      mr.start();
+
+      mediaRecorder.start();
       setIsRecording(true);
-      setRecordedBlob(null);
-      setRecordedDuration(0);
-      recordingStartRef.current = Date.now();
-      recordingTimerRef.current = window.setInterval(() => {
-        if (!recordingStartRef.current) return;
-        const secs = Math.floor((Date.now() - recordingStartRef.current) / 1000);
-        setRecordedDuration(secs);
-      }, 250);
-    } catch (e) {
-      console.error("record start fail", e);
+      setRecordingTime(0);
+
+      
+      recordingIntervalRef.current = window.setInterval(() => {
+        setRecordingTime(prev => +(prev + 0.1).toFixed(1));
+      }, 100) as unknown as number;
+
+    } catch (error) {
+      console.error('Error starting recording:', error);
     }
   };
 
   const stopRecording = () => {
-    try {
-      mediaRecorderRef.current?.stop();
+    if (mediaRecorderRef.current && isRecording) {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (e) {}
       setIsRecording(false);
-    } catch (e) {}
-  };
 
-  const cancelRecording = () => {
-    try {
-      mediaRecorderRef.current?.stop();
-    } catch {}
-    setIsRecording(false);
-    setRecordedBlob(null);
-    setRecordedDuration(0);
-    try { recordedStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
-    recordedStreamRef.current = null;
-    if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
-    recordingStartRef.current = null;
-  };
-
-  const sendVoice = async () => {
-    if (!recordedBlob) return;
-    try {
-      const localMsg: SocketMessage = {
-        id: `local-voice-${Date.now()}`,
-        user: { id: user?.id || "", name: user?.name || "You", picture: user?.picture || "" },
-        message: 'Voice message',
-        timestamp: new Date().toLocaleTimeString(),
-        isPrivate: false,
-        type: 'voice',
-        audioUrl: URL.createObjectURL(recordedBlob),
-        duration: Math.round(recordedDuration)
-      };
-      setMessages(prev => [...prev, localMsg]);
-      await socketManager.sendVoiceMessage(recordedBlob, Math.round(recordedDuration), false, { id: user?.id, name: user?.name, picture: user?.picture });
-      setRecordedBlob(null);
-      setRecordedDuration(0);
-    } catch (e) {
-      console.error("sendVoice fail", e);
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
     }
   };
 
-  // Voice player component
-  function VoicePlayer({ audioUrl, duration }: { audioUrl?: string; duration?: number }) {
-    const audioRef = useRef<HTMLAudioElement | null>(null);
-    const [playing, setPlaying] = useState(false);
-    const [pos, setPos] = useState(0);
+  const handleSendVoiceMessage = async () => {
+    if (audioBlob) {
+      setIsSendingVoiceMessage(true);
 
-    useEffect(() => {
-      const a = audioRef.current;
-      if (!a) return;
-      const onTime = () => setPos(a.currentTime || 0);
-      const onEnd = () => { setPlaying(false); setPos(0); };
-      a.addEventListener('timeupdate', onTime);
-      a.addEventListener('ended', onEnd);
-      return () => {
-        a.removeEventListener('timeupdate', onTime);
-        a.removeEventListener('ended', onEnd);
-      };
-    }, []);
+      
+      const timeoutId = setTimeout(() => {
+        setIsSendingVoiceMessage(false);
+        console.error('Voice message sending timeout');
+      }, 10000);
 
-    const toggle = async () => {
-      const a = audioRef.current;
-      if (!a) return;
-      if (playing) {
-        a.pause();
-        setPlaying(false);
-      } else {
+      try {
+        const voiceMessageId = `voice-${Date.now()}-${Math.random()}`;
+        const localVoiceMessage: SocketMessage = {
+          id: voiceMessageId,
+          user: {
+            id: user?.id || '',
+            name: user?.name || 'You',
+            picture: user?.picture || ''
+          },
+          message: 'Voice Message',
+          timestamp: new Date().toLocaleTimeString(),
+          isPrivate: false,
+          type: 'voice',
+          audioUrl: URL.createObjectURL(audioBlob), // local preview
+          duration: Math.round(recordingTime)
+        };
+
+        setMessages(prev => [...prev, localVoiceMessage]);
+
         try {
-          await a.play();
-          setPlaying(true);
-        } catch {
-          setPlaying(false);
-        }
-      }
-    };
+          await socketManager.sendVoiceMessage(audioBlob, Math.round(recordingTime), false, {
+            id: user?.id || '',
+            name: user?.name || 'You',
+            picture: user?.picture || ''
+          });
 
-    return (
-      <div className="flex items-center space-x-2">
-        <button onClick={toggle} className="p-2 rounded bg-gray-700/60 text-white">
-          {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
-        <div className="flex-1">
-          <div className="w-full h-2 bg-gray-600 rounded overflow-hidden">
-            <div className="h-full bg-purple-600" style={{ width: `${duration ? (pos / duration) * 100 : 0}%` }} />
-          </div>
-          <div className="text-xs text-gray-300 mt-1">{formatTime(pos)} / {formatTime(duration || 0)}</div>
-        </div>
-        <audio ref={audioRef} src={audioUrl} preload="auto" />
-      </div>
-    );
-  }
+          console.log('Voice message sent successfully');
+          // cleanup local blob URL after sending
+          setAudioBlob(null);
+          setRecordingTime(0);
+          clearTimeout(timeoutId);
+        } catch (sendError) {
+          console.error('Socket send error:', sendError);
+          setMessages(prev => prev.map(msg =>
+            msg.id === voiceMessageId ? { ...msg, failed: true } : msg
+          ));
+          throw sendError;
+        }
+      } catch (error) {
+        console.error('Error sending voice message:', error);
+        clearTimeout(timeoutId);
+      } finally {
+        setIsSendingVoiceMessage(false);
+      }
+    }
+  };
+
+  const playVoiceMessage = (messageId: string, audioUrl: string) => {
+    
+    let audio = audioRefs.current.get(messageId);
+    if (!audio) {
+      audio = new Audio(audioUrl);
+      audioRefs.current.set(messageId, audio);
+      audio.preload = "auto";
+      audio.addEventListener('timeupdate', () => {
+        if (audio && audio.duration) {
+          const progress = (audio.currentTime / audio.duration) * 100;
+          const currentTime = audio.currentTime;
+          setVoiceMessageProgress(prev => new Map(prev).set(messageId, progress));
+          setVoiceMessageCurrentTime(prev => new Map(prev).set(messageId, currentTime));
+        }
+      });
+      audio.addEventListener('ended', () => {
+        setPlayingVoiceMessages(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(messageId);
+          return newSet;
+        });
+        setVoiceMessageProgress(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(messageId);
+          return newMap;
+        });
+        setVoiceMessageCurrentTime(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(messageId);
+          return newMap;
+        });
+        audioRefs.current.delete(messageId);
+      });
+    }
+
+    audio.play().then(() => {
+      setPlayingVoiceMessages(prev => new Set(prev).add(messageId));
+    }).catch((e) => {
+      console.error("playVoiceMessage error:", e);
+    });
+  };
+
+  const pauseVoiceMessage = (messageId: string) => {
+    const audio = audioRefs.current.get(messageId);
+    if (audio) {
+      audio.pause();
+      setPlayingVoiceMessages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(messageId);
+        return newSet;
+      });
+    }
+  };
+
+  const stopVoiceMessage = (messageId: string) => {
+    const audio = audioRefs.current.get(messageId);
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      setPlayingVoiceMessages(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(messageId);
+        return newSet;
+      });
+      setVoiceMessageProgress(prev => {
+        const newMap = new Map(prev);
+        newMap.set(messageId, 0);
+        return newMap;
+      });
+      setVoiceMessageCurrentTime(prev => {
+        const newMap = new Map(prev);
+        newMap.set(messageId, 0);
+        return newMap;
+      });
+    }
+  };
+
+  
+  useEffect(() => {
+    return () => {
+      audioRefs.current.forEach((a) => {
+        try {
+          a.pause();
+          a.src = "";
+        } catch {}
+      });
+      audioRefs.current.clear();
+      
+      messages.forEach(msg => {
+        if (msg.type === 'voice' && msg.audioUrl && msg.audioUrl.startsWith('blob:')) {
+          try { URL.revokeObjectURL(msg.audioUrl); } catch {}
+        }
+      });
+    };
+   
+  }, []);
+
+  
 
   if (isLoading) return (
     <div className="min-h-screen bg-black flex items-center justify-center">
@@ -852,7 +913,47 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                       {!isOwn && <div className="flex items-center space-x-2 mb-1"><span className="text-sm font-medium text-white">{m.user.name}</span></div>}
                       <div className={`rounded-2xl px-4 py-2 shadow-sm ${isOwn ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-200"}`}>
                         {m.type === "voice" ? (
-                          <VoicePlayer audioUrl={m.audioUrl} duration={m.duration} />
+                          // Voice Player: uses audioUrl + duration
+                          <div className="flex items-center space-x-3 min-w-[200px]">
+                            <Avatar className="h-8 w-8 flex-shrink-0">
+                              <AvatarImage src={m.user.picture || "/placeholder.svg"} />
+                              <AvatarFallback className="text-xs bg-gray-700">{m.user.name.split(" ").map((n: string) => n[0]).join("")}</AvatarFallback>
+                            </Avatar>
+
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center space-x-3">
+                                {/* Play/Pause */}
+                                {playingVoiceMessages.has(m.id) ? (
+                                  <Button size="sm" variant="ghost" onClick={() => pauseVoiceMessage(m.id)} className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full animate-pulse">
+                                    <Pause className="h-4 w-4" />
+                                  </Button>
+                                ) : (
+                                  <Button size="sm" variant="ghost" onClick={() => m.audioUrl && playVoiceMessage(m.id, m.audioUrl!)} className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full">
+                                    <Play className="h-4 w-4" />
+                                  </Button>
+                                )}
+
+                                <div className="flex-1 min-w-0">
+                                  <div className="w-full h-1.5 bg-black/20 rounded-full overflow-hidden relative">
+                                    {/* waveform (visual only) */}
+                                    <div className="absolute inset-0 flex items-center justify-center space-x-px">
+                                      {Array.from({ length: 20 }, (_, i) => (
+                                        <div key={i} className="w-0.5 bg-current opacity-30" style={{ height: `${Math.random() * 60 + 20}%` }} />
+                                      ))}
+                                    </div>
+                                    {/* progress overlay */}
+                                    <div className="h-full bg-current rounded-full transition-all duration-100 relative z-10" style={{ width: `${voiceMessageProgress.get(m.id) || 0}%` }} />
+                                  </div>
+                                </div>
+
+                                <span className="text-xs opacity-70 min-w-[40px] text-right">
+                                  {voiceMessageCurrentTime.get(m.id) ? `${Math.floor(voiceMessageCurrentTime.get(m.id)!)}s` : `${m.duration}s`}
+                                </span>
+
+                              </div>
+                            </div>
+
+                          </div>
                         ) : (
                           <p className="text-sm leading-relaxed">{m.message}</p>
                         )}
@@ -881,32 +982,70 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 disabled={isRecording}
               />
               <div className="flex items-center space-x-2">
-                {!recordedBlob ? (
+                {/* Voice recording UI: either show record button (when no audioBlob) or preview + send/cancel */}
+                {!audioBlob ? (
                   <button
-                    onClick={() => { if (isRecording) stopRecording(); else startRecording(); }}
+                    onMouseDown={() => { if (!isRecording) startRecording(); }}
+                    onMouseUp={() => { if (isRecording) stopRecording(); }}
+                    onMouseLeave={() => { if (isRecording) stopRecording(); }}
                     className={`p-2 rounded ${isRecording ? "bg-red-600 text-white" : "bg-gray-700 text-white"}`}
                     title={isRecording ? "Stop recording" : "Record voice message"}
                   >
-                    <Mic className="w-4 h-4" />
+                    {isRecording ? (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
+                        <Mic className="w-4 h-4" />
+                        <span className="text-xs font-medium text-white">{recordingTime.toFixed(1)}s</span>
+                      </div>
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
                   </button>
                 ) : (
                   <div className="flex items-center space-x-2">
-                    <button onClick={() => { setRecordedBlob(null); setRecordedDuration(0); }} className="p-2 rounded bg-gray-700 text-white"><Trash2 className="w-4 h-4" /></button>
-                    <Button onClick={sendVoice} className="bg-purple-600 hover:bg-purple-700 px-3"><Send className="h-4 w-4" /></Button>
+                    {/* Preview play button */}
+                    <button onClick={() => {
+                      try {
+                        const audio = new Audio(URL.createObjectURL(audioBlob));
+                        audio.play();
+                      } catch (e) { console.error("preview play error", e); }
+                    }} className="p-2 rounded bg-gray-700 text-white">
+                      <Play className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => { setAudioBlob(null); setRecordingTime(0); }} className="p-2 rounded bg-gray-700 text-white"><Trash2 className="w-4 h-4" /></button>
+                    <Button onClick={handleSendVoiceMessage} className="bg-purple-600 hover:bg-purple-700 px-3" disabled={isSendingVoiceMessage}>
+                      {isSendingVoiceMessage ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending...</>) : (<Send className="h-4 w-4" />)}
+                    </Button>
                   </div>
                 )}
-                {!recordedBlob && <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>}
+                {!audioBlob && <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>}
               </div>
             </div>
 
             {isRecording && (
-              <div className="mt-2 text-xs text-gray-300">Recording... {formatTime(recordedDuration)}</div>
+              <div className="mt-2 text-xs text-gray-300">Recording... {recordingTime.toFixed(1)}s</div>
             )}
 
-            {recordedBlob && (
+            {audioBlob && (
               <div className="mt-3">
                 <div className="text-xs text-gray-300 mb-1">Preview</div>
-                <VoicePlayer audioUrl={URL.createObjectURL(recordedBlob)} duration={recordedDuration} />
+                <div className="w-full">
+                  <div className="flex items-center space-x-2">
+                    <button onClick={() => {
+                      try {
+                        const p = new Audio(URL.createObjectURL(audioBlob));
+                        p.play();
+                      } catch (e) { console.error(e); }
+                    }} className="p-2 rounded bg-gray-700 text-white"><Play className="w-4 h-4" /></button>
+                    <div className="flex-1">
+                      <div className="w-full h-2 bg-gray-600 rounded overflow-hidden">
+                        <div className="h-full bg-purple-600" style={{ width: `${(recordingTime / Math.max(recordingTime, 1)) * 100}%` }} />
+                      </div>
+                      <div className="text-xs text-gray-300 mt-1">{formatTime(recordingTime)}</div>
+                    </div>
+                    <button onClick={() => { setAudioBlob(null); setRecordingTime(0); }} className="p-2 rounded bg-gray-700 text-white"><X className="w-4 h-4" /></button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
