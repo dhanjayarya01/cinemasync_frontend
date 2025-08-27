@@ -64,6 +64,8 @@ export default function RoomsPage() {
     maxParticipants: 50,
     tags: [] as string[]
   })
+  const [roomCode, setRoomCode] = useState("")
+  const [isJoining, setIsJoining] = useState(false)
   const router = useRouter()
 
   useEffect(() => {
@@ -160,6 +162,27 @@ export default function RoomsPage() {
 
   const handleJoinRoom = (roomId: string) => {
     router.push(`/theater/${roomId}`)
+  }
+
+  const handleQuickJoin = async () => {
+    if (!roomCode.trim()) return
+    
+    setIsJoining(true)
+    try {
+      // Convert room code to lowercase for joining
+      const normalizedRoomCode = roomCode.trim().toLowerCase()
+      router.push(`/theater/${normalizedRoomCode}`)
+    } catch (error) {
+      console.error('Failed to join room:', error)
+      alert('Failed to join room. Please check the room code.')
+    } finally {
+      setIsJoining(false)
+    }
+  }
+
+  const handleRoomCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Auto-uppercase the room code for better UX
+    setRoomCode(e.target.value.toUpperCase())
   }
 
   if (!user) {
@@ -363,11 +386,29 @@ export default function RoomsPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <Input
-                  placeholder="Enter room code"
-                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:scale-105"
+                  placeholder="Enter room code (e.g. ABC123)"
+                  value={roomCode}
+                  onChange={handleRoomCodeChange}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && roomCode.trim()) {
+                      handleQuickJoin()
+                    }
+                  }}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:scale-105 uppercase"
                 />
-                <Button className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-300 hover:scale-105 hover-glow">
-                  Join with Code
+                <Button 
+                  onClick={handleQuickJoin}
+                  disabled={!roomCode.trim() || isJoining}
+                  className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-300 hover:scale-105 hover-glow disabled:opacity-50"
+                >
+                  {isJoining ? (
+                    <div className="flex items-center space-x-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Joining...</span>
+                    </div>
+                  ) : (
+                    "Join with Code"
+                  )}
                 </Button>
               </CardContent>
             </Card>

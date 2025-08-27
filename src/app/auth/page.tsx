@@ -49,8 +49,14 @@ export default function AuthPage() {
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
       
-      
-      router.push("/rooms")
+      // Check for redirect after login
+      const redirectPath = localStorage.getItem('redirectAfterLogin')
+      if (redirectPath) {
+        localStorage.removeItem('redirectAfterLogin')
+        router.push(redirectPath)
+      } else {
+        router.push("/rooms")
+      }
     } catch (error) {
       console.error('Google login error:', error)
       setError(error instanceof Error ? error.message : 'Failed to authenticate with Google')
@@ -80,7 +86,15 @@ export default function AuthPage() {
           avatar: "/placeholder.svg?height=40&width=40",
         }),
       )
-      router.push("/rooms")
+      
+      // Check for redirect after login
+      const redirectPath = localStorage.getItem('redirectAfterLogin')
+      if (redirectPath) {
+        localStorage.removeItem('redirectAfterLogin')
+        router.push(redirectPath)
+      } else {
+        router.push("/rooms")
+      }
     }, 1000)
   }
 

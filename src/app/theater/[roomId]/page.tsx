@@ -60,6 +60,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
 
+  // Invite modal state
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteLink, setInviteLink] = useState('');
+  const [inviteRoomCode, setInviteRoomCode] = useState('');
+
   // Voice message states
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -77,6 +82,48 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [ephemeralMessages, setEphemeralMessages] = useState<Array<{ id: string; text: string }>>([]);
 
   const isHost = user?.id === roomInfo?.host?.id;
+
+  // Generate invite link and room code
+  const generateInviteLink = async () => {
+    const link = await getInviteLink();
+    const code = await getRoomCode();
+    setInviteLink(link);
+    setInviteRoomCode(code);
+    setShowInviteModal(true);
+  };
+
+  const getInviteLink = async () => {
+    const resolved = await params;
+    return `${window.location.origin}/theater/${resolved.roomId}`;
+  };
+
+  const getRoomCode = async () => {
+    const resolved = await params;
+    return resolved.roomId?.toUpperCase() || '';
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
+  const shareOnWhatsApp = () => {
+    const text = `Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  const shareOnTelegram = () => {
+    const text = `Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`;
+    window.open(`https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent(text)}`, '_blank');
+  };
+
+  const shareOnDiscord = () => {
+    copyToClipboard(`Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`);
+  };
+
+  const shareOnTwitter = () => {
+    const text = `Join me for a movie night! Room code: ${inviteRoomCode}`;
+    window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(inviteLink)}`, '_blank');
+  };
 
   const extractYouTubeId = (url: string): string | null => {
     if (!url) return null;
@@ -202,6 +249,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         const currentUser = getCurrentUser();
         const token = getToken();
         if (!currentUser || !token) {
+          // Store the room ID to redirect after login
+          localStorage.setItem('redirectAfterLogin', `/theater/${roomId}`);
           router.push("/auth");
           return;
         }
@@ -809,7 +858,14 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           <div className="flex items-center space-x-4">
             <span className="px-2 py-1 bg-green-600/20 text-green-300 text-sm rounded-full flex items-center"><Users className="mr-1 h-3 w-3" />{participants.length}/5</span>
             {isHost && <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-sm rounded-full flex items-center"><Crown className="mr-1 h-3 w-3" />Host</span>}
-            <Button variant="outline" size="sm" className="text-white border-gray-600 hover:bg-gray-800 bg-transparent"><Settings className="mr-2 h-4 w-4" />Settings</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={generateInviteLink}
+              className="text-white border-gray-600 hover:bg-gray-800 bg-transparent"
+            >
+              <Users className="mr-2 h-4 w-4" />Invite
+            </Button>
           </div>
         </div>
       </header>
@@ -947,6 +1003,98 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             >
               <Play className="mr-2 h-4 w-4" /> Resume Playback
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Invite Modal */}
+      {showInviteModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-white">Invite Friends</h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowInviteModal(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+
+            {/* Room Code Section */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Room Code</label>
+              <div className="flex items-center space-x-2">
+                <Input
+                  value={inviteRoomCode}
+                  readOnly
+                  className="bg-gray-700 border-gray-600 text-white flex-1"
+                />
+                <Button
+                  onClick={() => copyToClipboard(inviteRoomCode)}
+                  variant="outline"
+                  size="sm"
+                  className="text-white border-gray-600 hover:bg-gray-700"
+                >
+                  Copy
+                </Button>
+              </div>
+            </div>
+
+            {/* Full Link Section */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-300 mb-2">Invite Link</label>
+              <div className="flex items-center space-x-2">
+                <Input
+                  value={inviteLink}
+                  readOnly
+                  className="bg-gray-700 border-gray-600 text-white flex-1 text-sm"
+                />
+                <Button
+                  onClick={() => copyToClipboard(inviteLink)}
+                  variant="outline"
+                  size="sm"
+                  className="text-white border-gray-600 hover:bg-gray-700"
+                >
+                  Copy
+                </Button>
+              </div>
+            </div>
+
+            {/* Social Share Buttons */}
+            <div className="space-y-3">
+              <p className="text-sm text-gray-300 mb-3">Share on social media:</p>
+
+              <Button
+                onClick={shareOnWhatsApp}
+                className="w-full bg-green-600 hover:bg-green-700 text-white"
+              >
+                Share on WhatsApp
+              </Button>
+
+              <Button
+                onClick={shareOnTelegram}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                Share on Telegram
+              </Button>
+
+              <Button
+                onClick={shareOnDiscord}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                Copy for Discord
+              </Button>
+
+              <Button
+                onClick={shareOnTwitter}
+                className="w-full bg-sky-600 hover:bg-sky-700 text-white"
+              >
+                Share on Twitter
+              </Button>
+            </div>
           </div>
         </div>
       )}

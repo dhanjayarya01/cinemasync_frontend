@@ -295,28 +295,17 @@ export default function Chat({
 
   // REMOVED: Old live voice transmission function to avoid conflicts
 
-  // NEW: Simplified mic button handlers - no holding needed in live mode
-  const handleMicMouseDown = () => {
-    if (!isLiveVoiceMode) {
-      // Regular tap-to-record behavior (only in normal mode)
-      if (!isRecording) startRecording();
-    }
-    // In live mode, mic is always active - no need to hold
-  };
-
-  const handleMicMouseUp = () => {
-    if (!isLiveVoiceMode) {
-      // Regular tap-to-record behavior (only in normal mode)
-      if (isRecording) stopRecording();
-    }
-    // In live mode, mic is always active - no need to release
-  };
-
+  // Simplified mic button handlers - no holding functionality
   const handleMicClick = () => {
-    // Click to toggle voice modes
-    if (!isRecording) {
-      toggleVoiceMode();
+    if (!isLiveVoiceMode) {
+      // Regular tap-to-record behavior (only in normal mode)
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
     }
+    // In live mode, mic is always active - no click functionality needed
   };
 
   // NEW: Quick voice mode toggle with debugging
@@ -524,14 +513,15 @@ export default function Chat({
     }
   `;
 
-  // autoscroll when the panel is visible and messages update
+  // Auto-scroll to bottom when new messages arrive in panel mode
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el || !isVisible) return;
+    
+    // Always scroll to bottom when new messages arrive
     const id = window.setTimeout(() => {
-      const atBottom = el.scrollHeight - el.clientHeight <= el.scrollTop + 160;
-      if (atBottom) el.scrollTop = el.scrollHeight;
-    }, 80);
+      el.scrollTop = el.scrollHeight;
+    }, 50);
     return () => clearTimeout(id);
   }, [messages, isVisible]);
 
@@ -547,8 +537,8 @@ export default function Chat({
     if (!fromOther) return;
     if (last.isPrivate) return;
 
-    // Show floating animation if floating mode enabled OR panel is visible (keeps old behavior)
-    if (isFloatingMode || isVisible) {
+    // Show floating animation only when floating mode enabled AND chat is closed
+    if (isFloatingMode && !isVisible) {
       const item: EphemeralItem = {
         id: `${last.id || Date.now()}`,
         text: last.type === "voice" ? "Voice message" : (last.message || ""),
@@ -556,7 +546,11 @@ export default function Chat({
         fromName: last.user?.name,
         fromAvatar: last.user?.picture,
       };
-      setEphemeralQueue((q) => [...q, item]);
+      setEphemeralQueue((q) => {
+        // Limit to maximum 3 floating messages and auto-scroll by removing oldest
+        const newQueue = [...q, item];
+        return newQueue.slice(-3); // Keep only the last 3 messages
+      });
 
       // Remove after animation length (4s). Use timer per-item.
       const t = window.setTimeout(() => {
@@ -580,12 +574,26 @@ export default function Chat({
     return `${mins}:${two(secs)}`;
   };
 
-  // Toggle via icon only; if opening panel clear ephemeralQueue (so sender won't see leftover)
+  // Toggle via icon only; if opening panel clear ephemeralQueue and switch to panel mode
   const onToggle = () => {
     setIsVisible((v) => {
       const next = !v;
-      if (next) setEphemeralQueue([]); // clear ephemeral when panel opens
+      if (next) {
+        setEphemeralQueue([]); // clear ephemeral when panel opens
+        setIsFloatingMode(false); // always open in panel mode
+      }
       return next;
+    });
+  };
+
+  // When switching to floating mode, close the chat
+  const handleFloatingModeToggle = () => {
+    setIsFloatingMode((v) => {
+      const nextFloating = !v;
+      if (nextFloating && isVisible) {
+        setIsVisible(false); // close chat when switching to floating mode
+      }
+      return nextFloating;
     });
   };
 
@@ -618,7 +626,7 @@ export default function Chat({
         </button>
 
         <button
-          onClick={() => setIsFloatingMode((v) => !v)}
+          onClick={handleFloatingModeToggle}
           title={isFloatingMode ? "Switch to panel" : "Switch to floating"}
           className="hidden md:inline-flex items-center justify-center px-2 py-1 rounded-full bg-gray-800/60 text-white hover:bg-gray-700/70 text-xs"
         >
@@ -639,26 +647,30 @@ export default function Chat({
 
       {/* Ephemeral overlay when chat is closed but floating mode is enabled */}
       {isFloatingMode && !isVisible && ephemeralQueue.length > 0 && (
-        <div className="absolute top-1/3 right-4 z-60 pointer-events-none" style={{ width: 360, maxWidth: "92%" }}>
+        <div className="absolute top-16 right-4 z-60 pointer-events-none max-h-[300px] overflow-hidden" style={{ width: 360, maxWidth: "92%" }}>
           <div className="flex flex-col items-end space-y-2">
-            {ephemeralQueue.map((q, idx) => (
+            {ephemeralQueue.slice(-3).map((q, idx) => (
               <div
                 key={q.id}
-                className="ephemeral-center px-4 py-2 rounded-md bg-black/72 text-white text-sm shadow-lg flex items-center space-x-3"
-                style={{ minWidth: 220, transform: `translateY(${idx * 12}px)` }}
+                className="ephemeral-center px-4 py-2 rounded-md bg-black/85 backdrop-blur-md text-white text-sm shadow-2xl border border-white/15 flex items-center space-x-3"
+                style={{ 
+                  minWidth: 240, 
+                  transform: `translateY(${idx * 10}px)`,
+                  animationDelay: `${idx * 150}ms`
+                }}
               >
                 {/* Avatar */}
                 <div className="flex-shrink-0">
                   {q.fromAvatar ? (
-                    <img src={q.fromAvatar} alt={q.fromName || "avatar"} className="w-8 h-8 rounded-full object-cover border border-white/8" />
+                    <img src={q.fromAvatar} alt={q.fromName || "avatar"} className="w-8 h-8 rounded-full object-cover border-2 border-white/25" />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center text-xs text-white">{(q.fromName || "U").split(" ").map(s=>s[0]).join("").slice(0,2)}</div>
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center text-xs text-white font-bold shadow-lg">{(q.fromName || "U").split(" ").map(s=>s[0]).join("").slice(0,2)}</div>
                   )}
                 </div>
 
-                <div className="text-left">
-                  <div className="font-medium text-sm">{q.fromName}</div>
-                  <div className="text-sm text-white/95">{q.text}</div>
+                <div className="text-left min-w-0 flex-1">
+                  <div className="font-semibold text-sm text-white/95 truncate mb-1">{q.fromName}</div>
+                  <div className="text-sm text-white/90 break-words line-clamp-2 leading-relaxed">{q.text}</div>
                 </div>
               </div>
             ))}
@@ -707,7 +719,7 @@ export default function Chat({
           </button>
           
           <button
-            onClick={() => setIsFloatingMode(v => !v)}
+            onClick={handleFloatingModeToggle}
             className="hidden md:inline-flex items-center justify-center px-2 py-1 rounded bg-transparent text-white/90 hover:bg-white/5 text-xs"
           >
             {isFloatingMode ? "Panel" : "Float"}
@@ -715,9 +727,9 @@ export default function Chat({
         </div>
       </div>
 
-      {/* NEW: Settings Panel */}
+      {/* NEW: Settings Panel - positioned outside container for floating mode */}
       {showSettings && (
-        <div className="absolute top-16 right-4 z-60 w-72 bg-gray-900/95 backdrop-blur-sm rounded-lg border border-white/10 shadow-xl pointer-events-auto">
+        <div className="fixed top-20 right-8 z-70 w-72 bg-gray-900/95 backdrop-blur-sm rounded-lg border border-white/10 shadow-xl pointer-events-auto">
           <div className="p-4 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-white font-semibold text-sm">Voice Chat Settings</h3>
@@ -796,7 +808,7 @@ export default function Chat({
               </label>
               <p className="text-white/60 text-xs">
                 {isLiveVoiceMode 
-                  ? "Hold mic button to talk continuously" 
+                  ? "Continuous voice transmission active" 
                   : "Tap mic to record and send voice messages"
                 }
               </p>
@@ -917,7 +929,7 @@ export default function Chat({
               }`} />
               <span className="text-xs text-white/90 font-medium">
                 {isLiveVoiceMode 
-                  ? (isHoldingMic ? 'Broadcasting...' : 'Live Mode - Hold to Talk') 
+                  ? 'Live Mode - Continuous Transmission' 
                   : `Recording... ${recordingTime.toFixed(1)}s`
                 }
               </span>
@@ -971,23 +983,21 @@ export default function Chat({
 
           {!audioBlob ? (
             <button
-              onMouseDown={handleMicMouseDown}
-              onMouseUp={handleMicMouseUp}
-              onMouseLeave={handleMicMouseUp}
+              onClick={handleMicClick}
               className={`p-2 rounded transition-colors ${
                 isLiveVoiceMode 
-                  ? (isHoldingMic ? "bg-red-600 text-white animate-pulse" : "bg-green-600 text-white")
+                  ? "bg-green-600 text-white"
                   : (isRecording ? "bg-red-600 text-white" : "bg-gray-700 text-white hover:bg-gray-600")
               }`}
               title={
                 isLiveVoiceMode 
-                  ? (isHoldingMic ? "Broadcasting..." : "Hold to talk (Live mode)")
+                  ? "Live mode active - use LIVE/MSG button to toggle"
                   : (isRecording ? "Stop recording" : "Record voice message")
               }
             >
               {isLiveVoiceMode ? (
                 <div className="flex items-center space-x-1">
-                  {isHoldingMic && <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>}
+                  <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                   <Mic className="w-4 h-4" />
                 </div>
               ) : isRecording ? (
@@ -1069,6 +1079,111 @@ export default function Chat({
               </div>
             </div>
 
+            {/* NEW: Settings Panel for non-floating mode */}
+            {showSettings && (
+              <div className="absolute top-16 right-4 z-60 w-72 bg-gray-900/95 backdrop-blur-sm rounded-lg border border-white/10 shadow-xl pointer-events-auto">
+                <div className="p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-white font-semibold text-sm">Voice Chat Settings</h3>
+                    <button
+                      onClick={() => setShowSettings(false)}
+                      className="text-white/60 hover:text-white/90 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  
+                  {/* Auto-play voice messages */}
+                  <div className="space-y-2">
+                    <label className="flex items-center justify-between">
+                      <span className="text-white/90 text-sm">Auto-play voice messages</span>
+                      <button
+                        onClick={() => setVoiceChatAutoPlay(!voiceChatAutoPlay)}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          voiceChatAutoPlay ? 'bg-purple-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                            voiceChatAutoPlay ? 'translate-x-5' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </label>
+                    <p className="text-white/60 text-xs">Automatically play voice messages from others</p>
+                  </div>
+
+                  {/* Voice chat volume */}
+                  <div className="space-y-2">
+                    <label className="text-white/90 text-sm flex items-center space-x-2">
+                      <Volume2 className="w-4 h-4" />
+                      <span>Voice chat volume</span>
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <VolumeX className="w-3 h-3 text-white/60" />
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        value={voiceChatVolume}
+                        onChange={(e) => setVoiceChatVolume(Number(e.target.value))}
+                        className="flex-1 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer slider"
+                      />
+                      <Volume2 className="w-3 h-3 text-white/60" />
+                    </div>
+                    <p className="text-white/60 text-xs">Volume level for voice messages and live chat</p>
+                  </div>
+
+                  {/* Live voice chat mode */}
+                  <div className="space-y-2">
+                    <label className="flex items-center justify-between">
+                      <span className="text-white/90 text-sm">Live voice chat mode</span>
+                      <button
+                        onClick={() => {
+                          if (isLiveVoiceMode) {
+                            stopLiveVoiceChat();
+                          } else {
+                            startLiveVoiceChat();
+                          }
+                        }}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                          isLiveVoiceMode ? 'bg-green-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                            isLiveVoiceMode ? 'translate-x-5' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </label>
+                    <p className="text-white/60 text-xs">
+                      {isLiveVoiceMode 
+                        ? "Continuous voice transmission active" 
+                        : "Tap mic to record and send voice messages"
+                      }
+                    </p>
+                  </div>
+
+                  {/* Live voice status */}
+                  {isLiveVoiceMode && (
+                    <div className="bg-green-900/30 border border-green-600/30 rounded-lg p-3">
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                        <span className="text-green-400 text-sm font-medium">
+                          Live mode active - Continuous transmission
+                        </span>
+                      </div>
+                      <p className="text-green-300/80 text-xs mt-1">
+                        Your microphone is continuously active and transmitting to others
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* messages list */}
             <div ref={chatScrollRef} className="hide-scrollbar overflow-y-auto px-4 pt-2" style={{ flex: 1 }}>
               <div className="space-y-3 px-1 pb-6">
@@ -1138,24 +1253,21 @@ export default function Chat({
 
                 {!audioBlob ? (
                   <button
-                    onMouseDown={handleMicMouseDown}
-                    onMouseUp={handleMicMouseUp}
-                    onMouseLeave={handleMicMouseUp}
                     onClick={handleMicClick}
                     className={`p-2 rounded transition-colors ${
                       isLiveVoiceMode 
-                        ? (isHoldingMic ? "bg-red-600 text-white animate-pulse" : "bg-green-600 text-white")
+                        ? "bg-green-600 text-white"
                         : (isRecording ? "bg-red-600 text-white" : "bg-gray-700 text-white hover:bg-gray-600")
                     }`}
                     title={
                       isLiveVoiceMode 
-                        ? (isHoldingMic ? "Broadcasting..." : "Hold to talk (Live mode)")
+                        ? "Live mode active - use LIVE/MSG button to toggle"
                         : (isRecording ? "Stop recording" : "Record voice message")
                     }
                   >
                     {isLiveVoiceMode ? (
                       <div className="flex items-center space-x-1">
-                        {isHoldingMic && <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>}
+                        <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
                         <Mic className="w-4 h-4" />
                       </div>
                     ) : isRecording ? (
