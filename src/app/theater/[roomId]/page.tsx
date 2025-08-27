@@ -12,6 +12,8 @@ import {
   Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2, X
 } from "lucide-react";
 
+import Chat from "@/lib/chat";
+
 import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket";
 import { webrtcManager } from "@/lib/webrtc";
 import { getToken, getCurrentUser } from "@/lib/auth";
@@ -47,7 +49,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const [isChatVisible] = useState(true);
+  // Chat overlay state now here
+  const [isChatVisible, setIsChatVisible] = useState(true);
+  const [isFloatingMode, setIsFloatingMode] = useState(false);
+
   const [message, setMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [showResumeOverlay, setShowResumeOverlay] = useState(false);
@@ -55,11 +60,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
 
-  // --- Voice message states (replaced by the working implementation) ---
+  // Voice message states
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0); // seconds with decimals in earlier code; original used integer seconds in another file — keep seconds
+  const [recordingTime, setRecordingTime] = useState(0);
   const [playingVoiceMessages, setPlayingVoiceMessages] = useState<Set<string>>(new Set());
   const [voiceMessageProgress, setVoiceMessageProgress] = useState<Map<string, number>>(new Map());
   const [voiceMessageCurrentTime, setVoiceMessageCurrentTime] = useState<Map<string, number>>(new Map());
@@ -68,7 +72,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingIntervalRef = useRef<number | null>(null);
   const audioRefs = useRef<Map<string, HTMLAudioElement>>(new Map());
-  // --------------------------------------------------------------------
+
+  // ephemeral messages for floating mode
+  const [ephemeralMessages, setEphemeralMessages] = useState<Array<{ id: string; text: string }>>([]);
 
   const isHost = user?.id === roomInfo?.host?.id;
 
@@ -234,7 +240,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           if (webrtcManager.isHostUser()) webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
         });
 
-        // Message handling (handle voice dedup)
         socketManager.onMessage((msg) => {
           try {
             if (msg.message) {
@@ -316,6 +321,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       socketManager.leaveRoom();
       webrtcManager.cleanup();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, router]);
 
   const handleVideoControl = (data: any) => {
@@ -480,7 +486,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (!videoRef.current) return;
     if (isHost) {
       const newMuted = !isMuted;
-      
       webrtcManager.setLocalMuted(newMuted);
       setIsMuted(newMuted);
       return;
@@ -493,7 +498,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     const v = Number(e.target.value);
     setVolume(v);
     if (isHost) {
-      
       webrtcManager.setLocalVolume(v);
     } else if (videoRef.current) {
       videoRef.current.volume = v;
@@ -585,7 +589,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return `${mins}:${two(secs)}`;
   };
 
-
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -599,7 +602,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         setAudioBlob(blob);
-        
         try { stream.getTracks().forEach(track => track.stop()); } catch {}
       };
 
@@ -607,11 +609,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setIsRecording(true);
       setRecordingTime(0);
 
-      
       recordingIntervalRef.current = window.setInterval(() => {
         setRecordingTime(prev => +(prev + 0.1).toFixed(1));
       }, 100) as unknown as number;
-
     } catch (error) {
       console.error('Error starting recording:', error);
     }
@@ -623,7 +623,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         mediaRecorderRef.current.stop();
       } catch (e) {}
       setIsRecording(false);
-
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
         recordingIntervalRef.current = null;
@@ -635,7 +634,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (audioBlob) {
       setIsSendingVoiceMessage(true);
 
-      
       const timeoutId = setTimeout(() => {
         setIsSendingVoiceMessage(false);
         console.error('Voice message sending timeout');
@@ -654,7 +652,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           timestamp: new Date().toLocaleTimeString(),
           isPrivate: false,
           type: 'voice',
-          audioUrl: URL.createObjectURL(audioBlob), // local preview
+          audioUrl: URL.createObjectURL(audioBlob),
           duration: Math.round(recordingTime)
         };
 
@@ -668,15 +666,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           });
 
           console.log('Voice message sent successfully');
-          // cleanup local blob URL after sending
           setAudioBlob(null);
           setRecordingTime(0);
           clearTimeout(timeoutId);
         } catch (sendError) {
           console.error('Socket send error:', sendError);
-          setMessages(prev => prev.map(msg =>
-            msg.id === voiceMessageId ? { ...msg, failed: true } : msg
-          ));
+          setMessages(prev => prev.map(msg => msg.id === voiceMessageId ? { ...msg, failed: true } : msg));
           throw sendError;
         }
       } catch (error) {
@@ -689,7 +684,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   };
 
   const playVoiceMessage = (messageId: string, audioUrl: string) => {
-    
     let audio = audioRefs.current.get(messageId);
     if (!audio) {
       audio = new Audio(audioUrl);
@@ -742,50 +736,38 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   };
 
-  const stopVoiceMessage = (messageId: string) => {
-    const audio = audioRefs.current.get(messageId);
-    if (audio) {
-      audio.pause();
-      audio.currentTime = 0;
-      setPlayingVoiceMessages(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(messageId);
-        return newSet;
-      });
-      setVoiceMessageProgress(prev => {
-        const newMap = new Map(prev);
-        newMap.set(messageId, 0);
-        return newMap;
-      });
-      setVoiceMessageCurrentTime(prev => {
-        const newMap = new Map(prev);
-        newMap.set(messageId, 0);
-        return newMap;
-      });
-    }
-  };
-
-  
+  // cleanup audio refs + revoke blob urls on unmount
   useEffect(() => {
     return () => {
       audioRefs.current.forEach((a) => {
-        try {
-          a.pause();
-          a.src = "";
-        } catch {}
+        try { a.pause(); a.src = ""; } catch {}
       });
       audioRefs.current.clear();
-      
       messages.forEach(msg => {
         if (msg.type === 'voice' && msg.audioUrl && msg.audioUrl.startsWith('blob:')) {
           try { URL.revokeObjectURL(msg.audioUrl); } catch {}
         }
       });
     };
-   
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  
+  // Ephemeral messages (floating) behavior:
+  const lastMessageIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isFloatingMode) return;
+    if (!messages || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (!last || last.id === lastMessageIdRef.current) return;
+    lastMessageIdRef.current = last.id;
+    const text = last.type === "voice" ? "Voice message" : (last.message || "");
+    const id = `ephemeral-${Date.now()}-${Math.random()}`;
+    setEphemeralMessages(prev => [...prev, { id, text }]);
+    const t = window.setTimeout(() => {
+      setEphemeralMessages(prev => prev.filter(m => m.id !== id));
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [messages, isFloatingMode]);
 
   if (isLoading) return (
     <div className="min-h-screen bg-black flex items-center justify-center">
@@ -843,7 +825,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFileSelect} className="hidden" />
 
       <div className="flex flex-col md:flex-row md:h-[calc(100vh-160px)]">
-        <div ref={videoContainerRef} className="md:flex-1 bg-black flex flex-col">
+        <div ref={videoContainerRef} className="md:flex-1 bg-black flex flex-col relative">
           <div className="flex-1 relative bg-gray-900 flex items-center justify-center" style={{ minHeight: 240 }}>
             <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
               {currentVideoType === "youtube" && youtubeVideoId ? (
@@ -871,7 +853,23 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   </div>
                   <div className="text-white text-sm">{formatTime(currentTime)} / {formatTime(duration)}</div>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => { if (document.fullscreenElement) document.exitFullscreen(); else videoContainerRef.current?.requestFullscreen(); }} className="text-white hover:bg-white/20"><Maximize className="h-5 w-5" /></Button>
+
+                <div className="flex items-center space-x-2">
+                  <Button variant="ghost" size="sm" onClick={() => { if (document.fullscreenElement) document.exitFullscreen(); else videoContainerRef.current?.requestFullscreen(); }} className="text-white hover:bg-white/20"><Maximize className="h-5 w-5" /></Button>
+
+                  <button className="md:hidden inline-flex items-center justify-center p-2 rounded bg-gray-700 hover:bg-gray-600 text-white" onClick={() => {
+                    // quick mobile rotation request: attempt fullscreen then orientation lock
+                    if (!document.fullscreenElement) {
+                      videoContainerRef.current?.requestFullscreen().catch(()=>{});
+                    }
+                    try { (screen as any).orientation?.lock?.("landscape"); } catch {}
+                  }} title="Mobile landscape">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                      <rect x="6" y="3" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="1.2" />
+                      <path d="M9 7 L15 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -880,176 +878,38 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 <Button onClick={handleStopScreenShare} variant="destructive" size="sm" className="bg-red-600 hover:bg-red-700"><StopCircle className="mr-2 h-4 w-4" />Stop Sharing</Button>
               </div>
             )}
+
+            {/* Chat overlay component */}
+            
+            <Chat  
+              user={user}
+              participants={participants}
+              messages={messages}
+              isVisible={isChatVisible}
+              setIsVisible={setIsChatVisible}
+              isFloatingMode={isFloatingMode}
+              setIsFloatingMode={setIsFloatingMode}
+              message={message}
+              setMessage={setMessage}
+              sendMessage={sendMessage}
+              isRecording={isRecording}
+              startRecording={startRecording}
+              stopRecording={stopRecording}
+              audioBlob={audioBlob}
+              setAudioBlob={setAudioBlob}
+              recordingTime={recordingTime}
+              handleSendVoiceMessage={handleSendVoiceMessage}
+              isSendingVoiceMessage={isSendingVoiceMessage}
+              playVoiceMessage={playVoiceMessage}
+              pauseVoiceMessage={pauseVoiceMessage}
+              playingVoiceMessages={playingVoiceMessages}
+              ephemeralMessages={ephemeralMessages}
+            />
+            
           </div>
         </div>
 
-        <div className="md:w-80 w-full md:h-auto h-[60vh] bg-gray-900 border-t md:border-l md:border-t-0 border-gray-800 flex flex-col">
-          <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-            <h3 className="text-white font-semibold">Chat</h3>
-            <div className="flex -space-x-2">
-              {participants.slice(0,5).map(p => (
-                <Avatar key={p.user.id} className="h-8 w-8 border-2 border-gray-800">
-                  <AvatarImage src={p.user.picture || "/placeholder.svg"} />
-                  <AvatarFallback className="text-xs bg-gray-700">{p.user.name.split(" ").map(n=>n[0]).join("")}</AvatarFallback>
-                </Avatar>
-              ))}
-              {participants.length > 5 && <div className="h-8 w-8 rounded-full bg-gray-600 border-2 border-gray-800 flex items-center justify-center"><span className="text-xs text-white">+{participants.length-5}</span></div>}
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4" ref={chatScrollRef}>
-            <div className="space-y-3">
-              {messages.filter(m => !m.isPrivate).map((m, idx) => {
-                const isOwn = m.user.id === user?.id;
-                return (
-                  <div key={`${m.id}-${idx}`} className={`flex ${isOwn ? "justify-end" : "justify-start"}`}>
-                    {!isOwn && (
-                      <Avatar className="h-8 w-8 mr-2 flex-shrink-0">
-                        <AvatarImage src={m.user.picture || "/placeholder.svg"} />
-                        <AvatarFallback className="text-xs bg-gray-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback>
-                      </Avatar>
-                    )}
-                    <div className={`max-w-[70%] ${isOwn ? "order-1" : "order-2"}`}>
-                      {!isOwn && <div className="flex items-center space-x-2 mb-1"><span className="text-sm font-medium text-white">{m.user.name}</span></div>}
-                      <div className={`rounded-2xl px-4 py-2 shadow-sm ${isOwn ? "bg-purple-600 text-white" : "bg-gray-700 text-gray-200"}`}>
-                        {m.type === "voice" ? (
-                          // Voice Player: uses audioUrl + duration
-                          <div className="flex items-center space-x-3 min-w-[200px]">
-                            <Avatar className="h-8 w-8 flex-shrink-0">
-                              <AvatarImage src={m.user.picture || "/placeholder.svg"} />
-                              <AvatarFallback className="text-xs bg-gray-700">{m.user.name.split(" ").map((n: string) => n[0]).join("")}</AvatarFallback>
-                            </Avatar>
-
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center space-x-3">
-                                {/* Play/Pause */}
-                                {playingVoiceMessages.has(m.id) ? (
-                                  <Button size="sm" variant="ghost" onClick={() => pauseVoiceMessage(m.id)} className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full animate-pulse">
-                                    <Pause className="h-4 w-4" />
-                                  </Button>
-                                ) : (
-                                  <Button size="sm" variant="ghost" onClick={() => m.audioUrl && playVoiceMessage(m.id, m.audioUrl!)} className="h-8 w-8 p-0 text-current hover:bg-black/20 rounded-full">
-                                    <Play className="h-4 w-4" />
-                                  </Button>
-                                )}
-
-                                <div className="flex-1 min-w-0">
-                                  <div className="w-full h-1.5 bg-black/20 rounded-full overflow-hidden relative">
-                                    {/* waveform (visual only) */}
-                                    <div className="absolute inset-0 flex items-center justify-center space-x-px">
-                                      {Array.from({ length: 20 }, (_, i) => (
-                                        <div key={i} className="w-0.5 bg-current opacity-30" style={{ height: `${Math.random() * 60 + 20}%` }} />
-                                      ))}
-                                    </div>
-                                    {/* progress overlay */}
-                                    <div className="h-full bg-current rounded-full transition-all duration-100 relative z-10" style={{ width: `${voiceMessageProgress.get(m.id) || 0}%` }} />
-                                  </div>
-                                </div>
-
-                                <span className="text-xs opacity-70 min-w-[40px] text-right">
-                                  {voiceMessageCurrentTime.get(m.id) ? `${Math.floor(voiceMessageCurrentTime.get(m.id)!)}s` : `${m.duration}s`}
-                                </span>
-
-                              </div>
-                            </div>
-
-                          </div>
-                        ) : (
-                          <p className="text-sm leading-relaxed">{m.message}</p>
-                        )}
-                      </div>
-                    </div>
-                    {isOwn && (
-                      <Avatar className="h-8 w-8 ml-2 flex-shrink-0">
-                        <AvatarImage src={m.user.picture || "/placeholder.svg"} />
-                        <AvatarFallback className="text-xs bg-purple-700">{m.user.name.split(" ").map(n => n[0]).join("")}</AvatarFallback>
-                      </Avatar>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="p-4 border-t border-gray-800">
-            <div className="flex space-x-2 items-center">
-              <Input
-                placeholder="Type a message..."
-                value={message}
-                onChange={(e)=>setMessage(e.target.value)}
-                onKeyDown={(e)=>{ if (e.key === "Enter" && message.trim()) { e.preventDefault(); sendMessage(); } }}
-                className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 flex-1"
-                disabled={isRecording}
-              />
-              <div className="flex items-center space-x-2">
-                {/* Voice recording UI: either show record button (when no audioBlob) or preview + send/cancel */}
-                {!audioBlob ? (
-                  <button
-                    onMouseDown={() => { if (!isRecording) startRecording(); }}
-                    onMouseUp={() => { if (isRecording) stopRecording(); }}
-                    onMouseLeave={() => { if (isRecording) stopRecording(); }}
-                    className={`p-2 rounded ${isRecording ? "bg-red-600 text-white" : "bg-gray-700 text-white"}`}
-                    title={isRecording ? "Stop recording" : "Record voice message"}
-                  >
-                    {isRecording ? (
-                      <div className="flex items-center space-x-2">
-                        <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
-                        <Mic className="w-4 h-4" />
-                        <span className="text-xs font-medium text-white">{recordingTime.toFixed(1)}s</span>
-                      </div>
-                    ) : (
-                      <Mic className="w-4 h-4" />
-                    )}
-                  </button>
-                ) : (
-                  <div className="flex items-center space-x-2">
-                    {/* Preview play button */}
-                    <button onClick={() => {
-                      try {
-                        const audio = new Audio(URL.createObjectURL(audioBlob));
-                        audio.play();
-                      } catch (e) { console.error("preview play error", e); }
-                    }} className="p-2 rounded bg-gray-700 text-white">
-                      <Play className="w-4 h-4" />
-                    </button>
-                    <button onClick={() => { setAudioBlob(null); setRecordingTime(0); }} className="p-2 rounded bg-gray-700 text-white"><Trash2 className="w-4 h-4" /></button>
-                    <Button onClick={handleSendVoiceMessage} className="bg-purple-600 hover:bg-purple-700 px-3" disabled={isSendingVoiceMessage}>
-                      {isSendingVoiceMessage ? (<><Loader2 className="h-4 w-4 mr-2 animate-spin" />Sending...</>) : (<Send className="h-4 w-4" />)}
-                    </Button>
-                  </div>
-                )}
-                {!audioBlob && <Button onClick={sendMessage} className="bg-purple-600 hover:bg-purple-700 px-3 disabled:opacity-50"><Send className="h-4 w-4" /></Button>}
-              </div>
-            </div>
-
-            {isRecording && (
-              <div className="mt-2 text-xs text-gray-300">Recording... {recordingTime.toFixed(1)}s</div>
-            )}
-
-            {audioBlob && (
-              <div className="mt-3">
-                <div className="text-xs text-gray-300 mb-1">Preview</div>
-                <div className="w-full">
-                  <div className="flex items-center space-x-2">
-                    <button onClick={() => {
-                      try {
-                        const p = new Audio(URL.createObjectURL(audioBlob));
-                        p.play();
-                      } catch (e) { console.error(e); }
-                    }} className="p-2 rounded bg-gray-700 text-white"><Play className="w-4 h-4" /></button>
-                    <div className="flex-1">
-                      <div className="w-full h-2 bg-gray-600 rounded overflow-hidden">
-                        <div className="h-full bg-purple-600" style={{ width: `${(recordingTime / Math.max(recordingTime, 1)) * 100}%` }} />
-                      </div>
-                      <div className="text-xs text-gray-300 mt-1">{formatTime(recordingTime)}</div>
-                    </div>
-                    <button onClick={() => { setAudioBlob(null); setRecordingTime(0); }} className="p-2 rounded bg-gray-700 text-white"><X className="w-4 h-4" /></button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        
       </div>
 
       {showResumeOverlay && (
