@@ -21,17 +21,17 @@ export default function AuthPage() {
   const [error, setError] = useState("")
   const router = useRouter()
 
-  // Check if user is already logged in
+  
   useEffect(() => {
     const token = getToken()
     
     if (token) {
-      // Verify token with backend
+     
       verifyToken(token).then(isValid => {
         if (isValid) {
           router.push("/rooms")
         } else {
-          // Token is invalid, clear storage
+          
           logout()
         }
       })
@@ -45,11 +45,11 @@ export default function AuthPage() {
     try {
       const data = await googleLogin(credentialResponse.credential)
       
-      // Store token and user data
+      
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
       
-      // Redirect to rooms page
+      
       router.push("/rooms")
     } catch (error) {
       console.error('Google login error:', error)
@@ -69,8 +69,7 @@ export default function AuthPage() {
     setIsLoading(true)
     setError("")
 
-    // For now, we'll keep the mock email authentication
-    // In a real app, you'd implement email/password authentication
+    
     setTimeout(() => {
       localStorage.setItem(
         "user",

@@ -1,4 +1,4 @@
-// lib/webrtc.ts
+
 import { socketManager } from './socket';
 
 export interface WebRTCPeer {

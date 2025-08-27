@@ -1,4 +1,4 @@
-// lib/voice-mode-manager.ts
+
 import { socketManager } from './socket';
 import type {
   VoiceMode,

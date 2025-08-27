@@ -1,4 +1,4 @@
-// app/(routes)/rooms/[roomId]/page.tsx (full updated TheaterPage)
+
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
