@@ -378,6 +378,33 @@ class SocketManager {
     }
   }
 
+  // NEW: Live voice chat methods
+  joinLiveVoice(user: { id: string; name: string; avatar?: string }) {
+    if (!this.socket || !this.roomId) return;
+    this.socket.emit('live-voice-join', { roomId: this.roomId, user });
+  }
+
+  leaveLiveVoice(userId: string) {
+    if (!this.socket || !this.roomId) return;
+    this.socket.emit('live-voice-leave', { roomId: this.roomId, userId });
+  }
+
+  sendLiveVoiceState(userId: string, isSpeaking: boolean, isMuted: boolean, audioLevel: number) {
+    if (!this.socket || !this.roomId) return;
+    this.socket.emit('live-voice-state', {
+      roomId: this.roomId,
+      userId,
+      isSpeaking,
+      isMuted,
+      audioLevel
+    });
+  }
+
+  sendLiveVoiceMute(userId: string, isMuted: boolean) {
+    if (!this.socket || !this.roomId) return;
+    this.socket.emit('live-voice-mute', { roomId: this.roomId, userId, isMuted });
+  }
+
   onMessage(cb: (m: SocketMessage) => void) { this.messageCallbacks.push(cb); return () => { this.messageCallbacks = this.messageCallbacks.filter(c => c !== cb); }; }
   offMessage(cb: (m: SocketMessage) => void) { this.messageCallbacks = this.messageCallbacks.filter(c => c !== cb); }
 

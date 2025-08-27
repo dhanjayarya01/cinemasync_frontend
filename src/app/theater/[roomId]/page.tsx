@@ -108,7 +108,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     await loadYouTubeAPI();
     if (!ytContainerRef.current) return null;
     const prev = getYTPlayer();
-    try { prev?.destroy?.(); } catch {}
+    try { prev?.destroy?.(); } catch { }
     try {
       const player = new (window as any).YT.Player(ytContainerRef.current, {
         height: "100%",
@@ -117,8 +117,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         playerVars: { autoplay: autoplay ? 1 : 0, controls: 1, rel: 0, start: Math.floor(start) },
         events: {
           onReady: (e: any) => {
-            if (muted) { try { e.target.mute(); } catch {} }
-            if (autoplay) { try { e.target.playVideo(); } catch {} }
+            if (muted) { try { e.target.mute(); } catch { } }
+            if (autoplay) { try { e.target.playVideo(); } catch { } }
           },
           onStateChange: (e: any) => {
             if (!isHost) return;
@@ -191,6 +191,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     let mounted = true;
     let authInFlight = true;
 
+    // Expose webrtcManager globally for Chat component
+    (window as any).webrtcManager = webrtcManager;
+
     const init = async () => {
       try {
         const resolved = await params;
@@ -209,6 +212,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         } catch {
           socketManager.connect();
         }
+
+        // Expose socketManager to global window for live voice chat
+        (window as any).socketManager = socketManager;
+
         webrtcManager.ensureSocketListeners();
 
         socketManager.onError((err) => {
@@ -246,7 +253,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               const parsed = JSON.parse(msg.message);
               if (parsed?.type === "user-joined") return;
             }
-          } catch {}
+          } catch { }
           if (msg.type === "voice" && msg.audioUrl) {
             if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
           }
@@ -269,7 +276,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               setCurrentVideoType("file");
             }
             if (videoRef.current) {
-              try { webrtcManager.setVideoElement(videoRef.current); } catch {}
+              try { webrtcManager.setVideoElement(videoRef.current); } catch { }
             }
             for (let i = 0; i < 4; i++) {
               setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
@@ -288,7 +295,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               setYoutubeVideoId(id);
               setCurrentVideoType("youtube");
               createYouTubePlayer(id, playback?.currentTime || 0, playback?.isPlaying || false, true)
-                .then((player) => { setTimeout(() => { try { player?.unMute?.(); } catch {} }, 300); })
+                .then((player) => { setTimeout(() => { try { player?.unMute?.(); } catch { } }, 300); })
                 .catch(console.error);
             } else {
               setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
@@ -300,7 +307,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.joinRoom(roomId);
 
-        const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token}` }});
+        const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await resp.json();
         if (data.success) {
           setRoomInfo(data.room);
@@ -329,9 +336,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (data.type && currentVideoType === "youtube") {
       const player = getYTPlayer();
       if (!player) return;
-      if (data.type === "play") { try { player.seekTo(data.currentTime || 0, true); player.playVideo(); } catch {} }
-      if (data.type === "pause") { try { player.pauseVideo(); } catch {} }
-      if (data.type === "seek") { try { player.seekTo(data.time || 0, true); } catch {} }
+      if (data.type === "play") { try { player.seekTo(data.currentTime || 0, true); player.playVideo(); } catch { } }
+      if (data.type === "pause") { try { player.pauseVideo(); } catch { } }
+      if (data.type === "seek") { try { player.seekTo(data.time || 0, true); } catch { } }
       return;
     }
     if (!videoRef.current) return;
@@ -357,7 +364,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       if (!id) return;
       setIsLoadingVideo(true);
       try {
-        try { webrtcManager.stopFileStream(); } catch {}
+        try { webrtcManager.stopFileStream(); } catch { }
         setSelectedVideoFile(null);
         setCurrentVideoType("youtube");
         await createYouTubePlayer(id, 0, true, false);
@@ -380,7 +387,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setIsLoadingVideo(true);
       const stream = await webrtcManager.startScreenShare();
       if (videoRef.current) {
-        try { (videoRef.current as any).srcObject = stream; videoRef.current.muted = false; await videoRef.current.play().catch(()=>{}); } catch {}
+        try { (videoRef.current as any).srcObject = stream; videoRef.current.muted = false; await videoRef.current.play().catch(() => { }); } catch { }
       }
       setCurrentVideoType("screen");
       socketManager.sendVideoMetadata({ name: "Screen Share", size: 0, type: "screen", url: "screen-share" });
@@ -401,7 +408,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       webrtcManager.stopScreenShare();
       setCurrentVideoType(null);
       setIsPlaying(false);
-      if (videoRef.current) try { (videoRef.current as any).srcObject = null; } catch {}
+      if (videoRef.current) try { (videoRef.current as any).srcObject = null; } catch { }
       socketManager.sendVideoMetadata({ name: "None", size: 0, type: "stopped", url: "" });
     } catch (e) { console.warn(e); }
   };
@@ -415,12 +422,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     setSelectedVideoFile(file);
     setCurrentVideoType("file");
     setIsLoadingVideo(true);
-    try { webrtcManager.stopFileStream(); } catch {}
+    try { webrtcManager.stopFileStream(); } catch { }
     setTimeout(() => {
       socketManager.sendVideoMetadata({ name: file.name, size: file.size, type: file.type, url: "p2p" });
       if (isHost && videoRef.current) {
         try {
-          webrtcManager.streamVideoFile(file, videoRef.current).catch((err)=>console.error("streamVideoFile err", err));
+          webrtcManager.streamVideoFile(file, videoRef.current).catch((err) => console.error("streamVideoFile err", err));
         } catch (e) { console.error(e); }
       }
     }, 200);
@@ -460,7 +467,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       if (!player) return;
       const state = player.getPlayerState ? player.getPlayerState() : null;
       if (state === 1) {
-        try { player.pauseVideo(); } catch {}
+        try { player.pauseVideo(); } catch { }
         setIsPlaying(false);
         if (isHost) socketManager.pauseVideo();
       } else {
@@ -515,7 +522,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       if (!player || !player.getDuration) return;
       const dur = player.getDuration();
       const seek = Math.max(0, Math.min(dur, pos * dur));
-      try { player.seekTo(seek, true); } catch {}
+      try { player.seekTo(seek, true); } catch { }
       if (isHost) socketManager.seekVideo(seek);
       return;
     }
@@ -536,7 +543,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       el.onplay = () => setIsPlaying(true);
       el.onpause = () => setIsPlaying(false);
       if (!isHost) {
-        try { webrtcManager.setVideoElement(el); } catch {}
+        try { webrtcManager.setVideoElement(el); } catch { }
         for (let i = 0; i < 3; i++) setTimeout(() => socketManager.sendVideoStateRequest(), 250 * i + 200);
       }
     } else {
@@ -602,7 +609,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       mediaRecorder.onstop = () => {
         const blob = new Blob(chunks, { type: 'audio/webm' });
         setAudioBlob(blob);
-        try { stream.getTracks().forEach(track => track.stop()); } catch {}
+        try { stream.getTracks().forEach(track => track.stop()); } catch { }
       };
 
       mediaRecorder.start();
@@ -621,7 +628,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     if (mediaRecorderRef.current && isRecording) {
       try {
         mediaRecorderRef.current.stop();
-      } catch (e) {}
+      } catch (e) { }
       setIsRecording(false);
       if (recordingIntervalRef.current) {
         clearInterval(recordingIntervalRef.current);
@@ -740,12 +747,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   useEffect(() => {
     return () => {
       audioRefs.current.forEach((a) => {
-        try { a.pause(); a.src = ""; } catch {}
+        try { a.pause(); a.src = ""; } catch { }
       });
       audioRefs.current.clear();
       messages.forEach(msg => {
         if (msg.type === 'voice' && msg.audioUrl && msg.audioUrl.startsWith('blob:')) {
-          try { URL.revokeObjectURL(msg.audioUrl); } catch {}
+          try { URL.revokeObjectURL(msg.audioUrl); } catch { }
         }
       });
     };
@@ -811,7 +818,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         <div className="bg-gray-900 border-b border-gray-800 px-4 py-3">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 flex gap-2">
-              <Input placeholder="Paste YouTube URL here (auto-plays when pasted)..." value={youtubeUrl} onChange={(e)=>setYoutubeUrl(e.target.value)} className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400" />
+              <Input placeholder="Paste YouTube URL here (auto-plays when pasted)..." value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400" />
               <div className="flex items-center px-3 bg-red-600/20 rounded-md"><Youtube className="h-4 w-4 text-red-400" /></div>
             </div>
             <div className="flex gap-2">
@@ -860,9 +867,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   <button className="md:hidden inline-flex items-center justify-center p-2 rounded bg-gray-700 hover:bg-gray-600 text-white" onClick={() => {
                     // quick mobile rotation request: attempt fullscreen then orientation lock
                     if (!document.fullscreenElement) {
-                      videoContainerRef.current?.requestFullscreen().catch(()=>{});
+                      videoContainerRef.current?.requestFullscreen().catch(() => { });
                     }
-                    try { (screen as any).orientation?.lock?.("landscape"); } catch {}
+                    try { (screen as any).orientation?.lock?.("landscape"); } catch { }
                   }} title="Mobile landscape">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
                       <rect x="6" y="3" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="1.2" />
@@ -880,8 +887,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             )}
 
             {/* Chat overlay component */}
-            
-            <Chat  
+
+            <Chat
               user={user}
               participants={participants}
               messages={messages}
@@ -903,13 +910,22 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               playVoiceMessage={playVoiceMessage}
               pauseVoiceMessage={pauseVoiceMessage}
               playingVoiceMessages={playingVoiceMessages}
-              ephemeralMessages={ephemeralMessages}
+              onVideoVolumeChange={(vol) => {
+                setVolume(vol);
+                if (videoRef.current) {
+                  videoRef.current.volume = vol;
+                }
+                if (isHost) {
+                  webrtcManager.setLocalVolume(vol);
+                }
+              }}
+              currentVideoVolume={volume}
             />
-            
+
           </div>
         </div>
 
-        
+
       </div>
 
       {showResumeOverlay && (
@@ -924,7 +940,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 if (currentVideoType === "youtube" && youtubeVideoId) {
                   await createYouTubePlayer(youtubeVideoId, currentTime || 0, true, false);
                 } else {
-                  try { await videoRef.current?.play(); } catch {}
+                  try { await videoRef.current?.play(); } catch { }
                 }
               }}
               className="bg-purple-600 hover:bg-purple-700"

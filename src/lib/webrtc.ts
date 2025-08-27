@@ -41,6 +41,14 @@ class WebRTCManager {
   private fileAudioGain: GainNode | null = null; // sent to peers
   private localPlaybackGain: GainNode | null = null; // host-local audible
   private retryCounts: Map<string, number> = new Map();
+  
+  // NEW: Live voice chat properties
+  private liveVoiceStream: MediaStream | null = null;
+  private isLiveVoiceModeActive = false;
+  private voiceChatCallbacks: {
+    onVoiceStreamReceived?: (peerId: string, stream: MediaStream) => void;
+    onVoiceStreamEnded?: (peerId: string) => void;
+  } = {};
 
   constructor() {}
 
@@ -516,6 +524,113 @@ class WebRTCManager {
     try {
       if (this.fileAudioGain) this.fileAudioGain.gain.value = muted ? 0 : (this.fileAudioGain.gain.value || 1);
     } catch (e) {}
+  }
+
+  // NEW: Live voice chat methods - COMPLETELY INDEPENDENT FROM VIDEO
+  public async startLiveVoiceChat(): Promise<MediaStream | null> {
+    try {
+      if (this.liveVoiceStream) {
+        this.stopLiveVoiceChat();
+      }
+
+      // Get microphone access
+      this.liveVoiceStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          sampleRate: 44100
+        } 
+      });
+
+      this.isLiveVoiceModeActive = true;
+
+      // COMPLETELY AVOID WebRTC for live voice to prevent video conflicts
+      // Instead, use socket.io for voice data transmission (simpler approach)
+      console.log('Live voice chat started (socket-based to avoid video conflicts)');
+      return this.liveVoiceStream;
+    } catch (error) {
+      console.error('Failed to start live voice chat:', error);
+      this.isLiveVoiceModeActive = false;
+      return null;
+    }
+  }
+
+  public stopLiveVoiceChat() {
+    if (this.liveVoiceStream) {
+      // Stop all tracks
+      this.liveVoiceStream.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {}
+      });
+
+      // Remove tracks from peer connections
+      this.peers.forEach(peer => {
+        const senders = peer.pc.getSenders();
+        senders.forEach(sender => {
+          if (sender.track && sender.track.kind === 'audio' && 
+              this.liveVoiceStream?.getAudioTracks().includes(sender.track)) {
+            try {
+              peer.pc.removeTrack(sender);
+            } catch (e) {}
+          }
+        });
+      });
+
+      this.liveVoiceStream = null;
+    }
+
+    this.isLiveVoiceModeActive = false;
+    console.log('Live voice chat stopped');
+  }
+
+  public isLiveVoiceModeActive(): boolean {
+    return this.isLiveVoiceModeActive;
+  }
+
+  public setVoiceChatCallbacks(callbacks: {
+    onVoiceStreamReceived?: (peerId: string, stream: MediaStream) => void;
+    onVoiceStreamEnded?: (peerId: string) => void;
+  }) {
+    this.voiceChatCallbacks = callbacks;
+  }
+
+  // NEW: Enhanced ontrack handler for voice streams
+  private handleTrackReceived(peerId: string, event: RTCTrackEvent) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+
+    const stream = event.streams[0];
+    const track = event.track;
+
+    if (track.kind === 'audio' && this.voiceChatCallbacks.onVoiceStreamReceived) {
+      // This is a voice stream from another participant
+      this.voiceChatCallbacks.onVoiceStreamReceived(peerId, stream);
+    } else if (track.kind === 'video') {
+      // Handle video streams as before
+      peer.stream = stream;
+      if (this.videoElement) {
+        try {
+          (this.videoElement as any).srcObject = stream;
+          this.videoElement.autoplay = true;
+          (this.videoElement as any).playsInline = true;
+          this.videoElement.play().catch(() => {});
+        } catch (e) {}
+      } else {
+        this.onStreamReceived(peerId, stream);
+      }
+    }
+  }
+
+  // NEW: Get connection status including voice chat info
+  public getConnectionStatus() {
+    return {
+      connectedPeers: Array.from(this.peers.values()).filter(p => p.isConnected).length,
+      totalPeers: this.peers.size,
+      isLiveVoiceActive: this.isLiveVoiceModeActive,
+      hasLiveVoiceStream: !!this.liveVoiceStream
+    };
   }
 
   async streamVideoFile(file: File, videoElement: HTMLVideoElement) {
