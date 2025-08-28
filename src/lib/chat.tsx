@@ -20,12 +20,10 @@ type Props = {
   isFloatingMode: boolean;
   setIsFloatingMode: (v: boolean) => void;
 
-  // text message state + handlers
   message: string;
   setMessage: (s: string) => void;
   sendMessage: () => void;
 
-  // recording state + handlers
   isRecording: boolean;
   startRecording: () => void;
   stopRecording: () => void;
@@ -35,14 +33,15 @@ type Props = {
   handleSendVoiceMessage: () => Promise<void>;
   isSendingVoiceMessage: boolean;
 
-  // voice playback
   playVoiceMessage: (id: string, url: string) => void;
   pauseVoiceMessage: (id: string) => void;
   playingVoiceMessages: Set<string>;
 
-  // NEW: video volume control for voice chat
   onVideoVolumeChange?: (volume: number) => void;
   currentVideoVolume?: number;
+
+  socketManager?: any;
+  webrtcManager?: any;
 };
 
 export default function Chat({
@@ -69,6 +68,8 @@ export default function Chat({
   playingVoiceMessages,
   onVideoVolumeChange,
   currentVideoVolume = 1,
+  socketManager,
+  webrtcManager,
 }: Props) {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const prevMessagesRef = useRef<string | null>(null);
@@ -210,7 +211,6 @@ export default function Chat({
                   const audioData = reader.result as string;
                   
                   // Send via socket for real-time playback (NOT as chat message)
-                  const socketManager = (window as any).socketManager;
                   if (socketManager && socketManager.socket) {
                     socketManager.socket.emit('live-voice-stream', {
                       audioData,
@@ -322,7 +322,6 @@ export default function Chat({
 
   // NEW: Listen for incoming live voice streams
   useEffect(() => {
-    const socketManager = (window as any).socketManager;
     if (socketManager && socketManager.socket) {
       // Listen for live voice streams from other participants
       socketManager.socket.on('live-voice-stream', (data: {
@@ -341,7 +340,7 @@ export default function Chat({
         socketManager.socket.off('live-voice-stream');
       };
     }
-  }, [user?.id]);
+  }, [user?.id, socketManager]);
 
   // NEW: Improved live voice playback with audio context for smoother streaming
   const audioContextRef = useRef<AudioContext | null>(null);

@@ -1,22 +1,14 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Play, Loader2 } from "lucide-react"
+import { Play, Shield, Lock, CheckCircle } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
 import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth"
 
 export default function AuthPage() {
-  const [isLogin, setIsLogin] = useState(true)
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [name, setName] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const router = useRouter()
@@ -49,7 +41,7 @@ export default function AuthPage() {
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
       
-      // Check for redirect after login
+      
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
         localStorage.removeItem('redirectAfterLogin')
@@ -70,34 +62,6 @@ export default function AuthPage() {
     setIsLoading(false)
   }
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setIsLoading(true)
-    setError("")
-
-    
-    setTimeout(() => {
-      localStorage.setItem(
-        "user",
-        JSON.stringify({
-          id: "2",
-          name: name || "User",
-          email: email,
-          avatar: "/placeholder.svg?height=40&width=40",
-        }),
-      )
-      
-      // Check for redirect after login
-      const redirectPath = localStorage.getItem('redirectAfterLogin')
-      if (redirectPath) {
-        localStorage.removeItem('redirectAfterLogin')
-        router.push(redirectPath)
-      } else {
-        router.push("/rooms")
-      }
-    }, 1000)
-  }
-
   return (
     <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ''}>
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4 overflow-hidden">
@@ -110,27 +74,28 @@ export default function AuthPage() {
                 CinemaSync
               </span>
             </Link>
-            <h1 className="text-3xl font-bold text-white mb-2">{isLogin ? "Welcome Back" : "Create Account"}</h1>
-            <p className="text-gray-300">{isLogin ? "Sign in to continue watching" : "Join the movie community"}</p>
+            <h1 className="text-3xl font-bold text-white mb-2">Secure Login</h1>
+            <p className="text-gray-300">Sign in safely with your Google account</p>
           </div>
 
           <Card className="bg-white/10 backdrop-blur-sm border-white/20 hover-lift animate-scaleIn">
-            <CardHeader>
-              <CardTitle className="text-white text-center">{isLogin ? "Sign In" : "Sign Up"}</CardTitle>
-              <CardDescription className="text-gray-300 text-center">
-                {isLogin ? "Enter your credentials to access your account" : "Create your account to get started"}
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 w-16 h-16 bg-gradient-to-br from-green-400 to-blue-500 rounded-full flex items-center justify-center">
+                <Shield className="w-8 h-8 text-white" />
+              </div>
+              <CardTitle className="text-white text-xl">Secure Google Authentication</CardTitle>
+              <CardDescription className="text-gray-300">
+                Sign in safely with your Google account - no passwords to remember
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Error Message */}
+            <CardContent className="space-y-6">
               {error && (
                 <div className="bg-red-500/20 border border-red-500/50 text-red-200 px-4 py-2 rounded-md text-sm animate-fadeInUp">
                   {error}
                 </div>
               )}
 
-              {/* Google Login Button */}
-              <div className="w-full">
+                <div className="w-full flex justify-center">
                 <GoogleLogin
                   onSuccess={handleGoogleSuccess}
                   onError={handleGoogleError}
@@ -141,112 +106,45 @@ export default function AuthPage() {
                 />
               </div>
 
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-white/20" />
+              <div className="space-y-4">
+                <div className="flex items-center space-x-3 text-sm text-gray-300">
+                  <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+                  <span>Protected by Google's advanced security</span>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-transparent px-2 text-gray-400">Or continue with email</span>
+                <div className="flex items-center space-x-3 text-sm text-gray-300">
+                  <Lock className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                  <span>Your data is encrypted and secure</span>
+                </div>
+                <div className="flex items-center space-x-3 text-sm text-gray-300">
+                  <CheckCircle className="w-5 h-5 text-purple-400 flex-shrink-0" />
+                  <span>No passwords to manage or remember</span>
                 </div>
               </div>
 
-              {/* Email Form */}
-              <form onSubmit={handleEmailAuth} className="space-y-4">
-                {!isLogin && (
-                  <div className="space-y-2 animate-fadeInUp delay-100">
-                    <label htmlFor="name" className="text-white text-sm font-medium">
-                      Full Name
-                    </label>
-                    <Input
-                      id="name"
-                      type="text"
-                      placeholder="Enter your full name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      required={!isLogin}
-                      className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:scale-105"
-                    />
-                  </div>
-                )}
+             
 
-                <div className="space-y-2 animate-fadeInUp delay-200">
-                  <label htmlFor="email" className="text-white text-sm font-medium">
-                    Email
-                  </label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="Enter your email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:scale-105"
-                  />
-                </div>
-
-                <div className="space-y-2 animate-fadeInUp delay-300">
-                  <label htmlFor="password" className="text-white text-sm font-medium">
-                    Password
-                  </label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Enter your password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:scale-105"
-                  />
-                </div>
-
-                {isLogin && (
-                  <div className="text-right animate-fadeInUp delay-400">
-                    <a href="#" className="text-sm text-purple-300 hover:text-purple-200 transition-colors duration-300">
-                      Forgot password?
-                    </a>
-                  </div>
-                )}
-
-                <Button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 animate-fadeInUp delay-500"
-                >
-                  {isLoading ? (
-                    <div className="flex items-center space-x-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>{isLogin ? "Signing In..." : "Creating Account..."}</span>
-                    </div>
-                  ) : (
-                    <span>{isLogin ? "Sign In" : "Create Account"}</span>
-                  )}
-                </Button>
-              </form>
-
-              <div className="text-center animate-fadeInUp delay-600">
-                <p className="text-gray-300">
-                  {isLogin ? "Don't have an account?" : "Already have an account?"}
-                  <button
-                    onClick={() => setIsLogin(!isLogin)}
-                    className="ml-1 text-purple-300 hover:text-purple-200 font-medium transition-colors duration-300"
-                  >
-                    {isLogin ? "Sign up" : "Sign in"}
-                  </button>
-                </p>
+              <div className="text-center text-xs text-gray-400 bg-gray-800/30 rounded-lg p-3">
+                <Lock className="w-4 h-4 inline mr-1" />
+                Your privacy is protected. We only access your basic profile information.
               </div>
             </CardContent>
           </Card>
 
-          <p className="text-center text-gray-400 text-sm mt-6 animate-fadeInUp delay-700">
-            By continuing, you agree to our{" "}
-            <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
-              Terms of Service
-            </a>{" "}
-            and{" "}
-            <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
-              Privacy Policy
-            </a>
-          </p>
+          <div className="text-center mt-6 animate-fadeInUp delay-700">
+            <p className="text-gray-400 text-sm mb-2">
+              Trusted by thousands of movie enthusiasts worldwide
+            </p>
+            <p className="text-gray-500 text-xs">
+              By continuing, you agree to our{" "}
+              <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
+                Terms of Service
+              </a>{" "}
+              and{" "}
+              <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
+                Privacy Policy
+              </a>
+            </p>
+          </div>
         </div>
       </div>
     </GoogleOAuthProvider>

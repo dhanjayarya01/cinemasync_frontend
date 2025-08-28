@@ -239,8 +239,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     let mounted = true;
     let authInFlight = true;
 
-    // Expose webrtcManager globally for Chat component
-    (window as any).webrtcManager = webrtcManager;
+    // webrtcManager will be passed as prop to Chat component instead of global exposure
 
     const init = async () => {
       try {
@@ -263,8 +262,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           socketManager.connect();
         }
 
-        // Expose socketManager to global window for live voice chat
-        (window as any).socketManager = socketManager;
+        // socketManager will be passed as prop to Chat component instead of global exposure
 
         webrtcManager.ensureSocketListeners();
 
@@ -511,6 +509,18 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const handleShareScreen = async () => {
     try {
       setIsLoadingVideo(true);
+
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (isMobile) {
+        setError("Screen sharing is not supported on mobile devices. Please use a desktop browser.");
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        setError("Screen sharing is not supported in this browser.");
+        return;
+      }
+
       const stream = await webrtcManager.startScreenShare();
       if (videoRef.current) {
         try { (videoRef.current as any).srcObject = stream; videoRef.current.muted = false; await videoRef.current.play().catch(() => { }); } catch { }
@@ -523,7 +533,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       });
     } catch (e) {
       console.error("share screen error", e);
-      setError("Screen share failed / permission denied");
+      if (e.name === "NotAllowedError") {
+        setError("Screen share permission denied. Please allow screen sharing and try again.");
+      } else if (e.name === "NotSupportedError") {
+        setError("Screen sharing is not supported in this browser.");
+      } else {
+        setError("Screen share failed. Please try again.");
+      }
     } finally {
       setIsLoadingVideo(false);
     }
@@ -1017,7 +1033,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               <div className="flex items-center px-3 bg-red-600/20 rounded-md"><Youtube className="h-4 w-4 text-red-400" /></div>
             </div>
             <div className="flex gap-2">
-              <Button onClick={handleShareScreen} disabled={isLoadingVideo} className="bg-blue-600 hover:bg-blue-700 transition-all duration-300"><Monitor className="mr-2 h-4 w-4" />Share Screen</Button>
+              {!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && (
+                <Button onClick={handleShareScreen} disabled={isLoadingVideo} className="bg-blue-600 hover:bg-blue-700 transition-all duration-300"><Monitor className="mr-2 h-4 w-4" />Share Screen</Button>
+              )}
               <Button onClick={handleSelectVideo} disabled={isLoadingVideo} className="bg-green-600 hover:bg-green-700 transition-all duration-300"><Video className="mr-2 h-4 w-4" />Select Video</Button>
             </div>
           </div>
@@ -1089,7 +1107,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   <Button
                     onClick={() => {
                       setShowResumeButton(false);
-                     
+
                       togglePlayPause();
                     }}
                     className="bg-purple-600 hover:bg-purple-700"
@@ -1134,6 +1152,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 }
               }}
               currentVideoVolume={volume}
+              socketManager={socketManager}
+              webrtcManager={webrtcManager}
             />
 
           </div>
