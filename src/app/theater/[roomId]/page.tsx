@@ -835,15 +835,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       }
 
       // Reset container key for next mount
-      setYoutubeContainerKey(0); yer = getYTPlayer();
-      if (existingPlayer) {
-        try {
-          existingPlayer.destroy();
-          setYTPlayer(null);
-        } catch (e) {
-          console.warn("Error destroying YouTube player on unmount:", e);
-        }
-      }
+      setYoutubeContainerKey(0);
 
       socketManager.leaveRoom();
       webrtcManager.cleanup();
@@ -1504,29 +1496,28 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
   }, []);
 
-  // Simple resume button - show after refresh for non-host users (only for non-YouTube videos)
   useEffect(() => {
     if (!isHost && user && roomInfo && currentVideoType !== "youtube") {
-      // Show resume button after page load for non-host users
+      
       const timer = setTimeout(() => {
         setShowResumeButton(true);
-      }, 2000); // Show after 2 seconds
+      }, 2000); 
 
       return () => clearTimeout(timer);
     }
   }, [isHost, user, roomInfo, currentVideoType]);
 
-  // Hide resume button when video starts playing
+ 
   useEffect(() => {
     if (isPlaying) {
       setShowResumeButton(false);
     }
   }, [isPlaying]);
 
-  // Add CSS to hide YouTube UI elements
+  
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
@@ -1582,7 +1573,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     };
   }, []);
 
-  // Clean up YouTube player when video type changes
+  
   useEffect(() => {
     if (currentVideoType !== "youtube") {
       const existingPlayer = getYTPlayer();
@@ -1597,33 +1588,22 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
       }
 
-      // Recreate container to ensure clean state for next YouTube video
       recreateYouTubeContainer();
     }
   }, [currentVideoType, recreateYouTubeContainer]);
 
-  // Handle refresh - request video state when component is ready
   useEffect(() => {
     if (!isHost && user && roomInfo) {
       console.log("Requesting video state after refresh/mount");
-      // Multiple requests to ensure we get the current state
-      const requestState = () => {
-        for (let i = 0; i < 6; i++) {
-          setTimeout(() => {
-            socketManager.sendVideoStateRequest();
-            console.log("Requesting video state", i + 1);
-          }, 500 * i + 500);
-        }
-      };
-
-      requestState();
-
-      // Also request again after a longer delay in case socket wasn't ready
-      setTimeout(requestState, 3000);
+      for (let i = 0; i < 3; i++) {
+        setTimeout(() => {
+          socketManager.sendVideoStateRequest();
+          console.log("Requesting video state", i + 1);
+        }, 1000 * i + 1000);
+      }
     }
   }, [isHost, user, roomInfo]);
 
-  // YouTube time tracking for progress bar
   useEffect(() => {
     if (currentVideoType !== "youtube") return;
 
@@ -1636,7 +1616,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           setCurrentTime(currentTime);
           setDuration(duration);
         } catch (e) {
-          // Player might not be ready yet
         }
       }
     };
@@ -1645,7 +1624,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     return () => clearInterval(interval);
   }, [currentVideoType, youtubeVideoId]);
 
-  // Ephemeral messages (floating) behavior:
   const lastMessageIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!isFloatingMode) return;
@@ -1794,7 +1772,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   <Button variant="ghost" size="sm" onClick={() => { if (document.fullscreenElement) document.exitFullscreen(); else videoContainerRef.current?.requestFullscreen(); }} className="text-white hover:bg-white/20"><Maximize className="h-5 w-5" /></Button>
 
                   <button className="md:hidden inline-flex items-center justify-center p-2 rounded bg-gray-700 hover:bg-gray-600 text-white" onClick={() => {
-                    // quick mobile rotation request: attempt fullscreen then orientation lock
                     if (!document.fullscreenElement) {
                       videoContainerRef.current?.requestFullscreen().catch(() => { });
                     }

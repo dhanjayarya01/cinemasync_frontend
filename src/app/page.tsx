@@ -128,8 +128,8 @@ export default function LandingPage() {
             },
             {
               icon: Shield,
-              title: "Privacy Controls",
-              description: "Full control over room privacy with public and private options",
+              title: "Room Types",
+              description: "Choose between public rooms or invite-only sessions",
               color: "text-yellow-400",
               delay: "delay-400",
             },

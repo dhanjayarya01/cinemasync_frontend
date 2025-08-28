@@ -118,13 +118,7 @@ class SocketManager {
     this.socket.on('connect', () => {
       this.isConnected = true;
       this.authenticate();
-      this.connectCallbacks.forEach(cb => { try { cb(); } catch (e) {} });
-
-      if (this.pendingJoin) {
-        const pj = this.pendingJoin;
-        this.pendingJoin = null;
-        this.joinRoom(pj.roomId).then(() => pj.resolve && pj.resolve()).catch((e) => pj.reject && pj.reject(e));
-      }
+      this.connectCallbacks.forEach(cb => { try { cb(); } catch (e) { } });
     });
 
     this.socket.on('disconnect', (reason) => {
@@ -135,7 +129,16 @@ class SocketManager {
     });
 
     this.socket.on('authenticated', (data) => {
-      this.authenticatedCallbacks.forEach(cb => { try { cb(data); } catch (e) {} });
+      console.log('[DEBUG] Socket authenticated:', data);
+      this.authenticatedCallbacks.forEach(cb => { try { cb(data); } catch (e) { } });
+
+      // Process pending join after authentication
+      if (this.pendingJoin) {
+        console.log('[DEBUG] Processing pending join after authentication:', this.pendingJoin.roomId);
+        const pj = this.pendingJoin;
+        this.pendingJoin = null;
+        this.joinRoom(pj.roomId).then(() => pj.resolve && pj.resolve()).catch((e) => pj.reject && pj.reject(e));
+      }
     });
 
     this.socket.on('auth-error', (data) => {
@@ -143,6 +146,7 @@ class SocketManager {
     });
 
     this.socket.on('room-joined', (data) => {
+      console.log('[DEBUG] Room-joined event received:', data);
       this.roomId = data.room?.id || this.roomId;
       this.roomInfoCallbacks.forEach(cb => cb(data.room));
       if (this.pendingJoin && this.pendingJoin.roomId === data.room?.id) {
@@ -248,12 +252,14 @@ class SocketManager {
     });
 
     this.socket.on('error', (data) => {
+      console.log('[DEBUG] Socket error received:', data);
       this.errorCallbacks.forEach(cb => cb(data.error || 'Unknown socket error'));
     });
   }
 
   private authenticate() {
     const token = getToken();
+    console.log('[DEBUG] Authenticating socket:', { hasToken: !!token, hasSocket: !!this.socket });
     if (!token || !this.socket) return;
     this.socket.emit('authenticate', { token });
   }
@@ -267,24 +273,31 @@ class SocketManager {
   }
 
   joinRoom(roomId: string): Promise<any> {
+    console.log('[DEBUG] Frontend attempting to join room:', roomId);
     if (!this.socket) {
+      console.log('[DEBUG] No socket, setting pending join and connecting');
       this.pendingJoin = { roomId };
       this.connect();
       return Promise.resolve();
     }
 
     if (!this.isConnected) {
+      console.log('[DEBUG] Socket not connected, setting pending join');
       return new Promise((resolve, reject) => {
         this.pendingJoin = { roomId, resolve, reject, attempts: 0 };
         this.connect();
       });
     }
 
+    console.log('[DEBUG] Emitting join-room for:', roomId);
+    console.log('[DEBUG] Socket connected status:', this.isConnected);
+    console.log('[DEBUG] Socket ID:', this.socket.id);
     this.roomId = roomId;
     this.socket.emit('join-room', { roomId });
     return new Promise((resolve) => {
       const onJoined = (room: any) => {
         if (room && room.id === roomId) {
+          console.log('[DEBUG] Room joined successfully:', room.id);
           resolve(room);
           off();
         }
@@ -428,7 +441,7 @@ class SocketManager {
     if (this.pendingOffers.length) {
       const queued = this.pendingOffers.slice();
       this.pendingOffers = [];
-      queued.forEach(it => { try { cb(it); } catch (e) {} });
+      queued.forEach(it => { try { cb(it); } catch (e) { } });
     }
     return () => { this.webrtcOfferCallbacks = this.webrtcOfferCallbacks.filter(c => c !== cb); };
   }
@@ -439,7 +452,7 @@ class SocketManager {
     if (this.pendingAnswers.length) {
       const queued = this.pendingAnswers.slice();
       this.pendingAnswers = [];
-      queued.forEach(it => { try { cb(it); } catch (e) {} });
+      queued.forEach(it => { try { cb(it); } catch (e) { } });
     }
     return () => { this.webrtcAnswerCallbacks = this.webrtcAnswerCallbacks.filter(c => c !== cb); };
   }
@@ -450,7 +463,7 @@ class SocketManager {
     if (this.pendingIceCandidates.length) {
       const queued = this.pendingIceCandidates.slice();
       this.pendingIceCandidates = [];
-      queued.forEach(it => { try { cb(it); } catch (e) {} });
+      queued.forEach(it => { try { cb(it); } catch (e) { } });
     }
     return () => { this.webrtcIceCandidateCallbacks = this.webrtcIceCandidateCallbacks.filter(c => c !== cb); };
   }

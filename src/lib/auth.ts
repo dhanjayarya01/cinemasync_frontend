@@ -15,7 +15,6 @@ export interface AuthResponse {
   user: User
 }
 
-// Get current user from localStorage
 export const getCurrentUser = (): User | null => {
   if (typeof window === 'undefined') return null
   
@@ -29,18 +28,16 @@ export const getCurrentUser = (): User | null => {
   }
 }
 
-// Get current token from localStorage
 export const getToken = (): string | null => {
   if (typeof window === 'undefined') return null
   return localStorage.getItem('token')
 }
 
-// Check if user is authenticated
 export const isAuthenticated = (): boolean => {
   return getToken() !== null && getCurrentUser() !== null
 }
 
-// Logout user
+
 export const logout = (): void => {
   if (typeof window === 'undefined') return
   
@@ -48,7 +45,6 @@ export const logout = (): void => {
   localStorage.removeItem('user')
 }
 
-// Verify token with backend
 export const verifyToken = async (token: string): Promise<boolean> => {
   try {
     const response = await fetch(`${API_BASE_URL}/api/auth/profile`, {
@@ -63,7 +59,7 @@ export const verifyToken = async (token: string): Promise<boolean> => {
   }
 }
 
-// Google OAuth login
+
 export const googleLogin = async (credential: string): Promise<AuthResponse> => {
   const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
     method: 'POST',
@@ -81,7 +77,7 @@ export const googleLogin = async (credential: string): Promise<AuthResponse> => 
   return response.json()
 }
 
-// Logout from backend
+
 export const logoutFromBackend = async (): Promise<void> => {
   const token = getToken()
   if (!token) return
