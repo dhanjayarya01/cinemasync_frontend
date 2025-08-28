@@ -56,6 +56,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [message, setMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const [showResumeOverlay, setShowResumeOverlay] = useState(false);
+  const [showResumeButton, setShowResumeButton] = useState(false);
 
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
@@ -314,19 +315,31 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onVideoMetadata((metadata) => {
           if (!mounted) return;
+          console.log("Received video metadata:", metadata);
+
           if (!isHost) {
             if (metadata.type === "youtube") {
               const id = extractYouTubeId(metadata.url || "");
-              setYoutubeVideoId(id);
-              setCurrentVideoType("youtube");
+              if (id) {
+                setYoutubeVideoId(id);
+                setYoutubeUrl(metadata.url || "");
+                setCurrentVideoType("youtube");
+              }
             } else if (metadata.type === "screen") {
               setCurrentVideoType("screen");
-            } else {
+            } else if (metadata.type === "file" || metadata.type.startsWith("video/")) {
               setCurrentVideoType("file");
+            } else if (metadata.type === "stopped") {
+              setCurrentVideoType(null);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
             }
-            if (videoRef.current) {
+
+            if (videoRef.current && metadata.type !== "youtube") {
               try { webrtcManager.setVideoElement(videoRef.current); } catch { }
             }
+
+            // Request current state after metadata change
             for (let i = 0; i < 4; i++) {
               setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
             }
@@ -335,21 +348,76 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onVideoStateSync((data) => {
           if (!mounted) return;
+          console.log("Received video state sync:", data);
           const vs = data.videoState || data;
           const metadata = vs.metadata || data.metadata;
           const playback = vs.playbackState || data.playbackState;
+
           if (!isHost && metadata) {
             if (metadata.type === "youtube") {
               const id = extractYouTubeId(metadata.url || "");
-              setYoutubeVideoId(id);
-              setCurrentVideoType("youtube");
-              createYouTubePlayer(id, playback?.currentTime || 0, playback?.isPlaying || false, true)
-                .then((player) => { setTimeout(() => { try { player?.unMute?.(); } catch { } }, 300); })
-                .catch(console.error);
+              if (id) {
+                setYoutubeVideoId(id);
+                setYoutubeUrl(metadata.url || "");
+                setCurrentVideoType("youtube");
+
+                // Update playback state
+                if (playback) {
+                  setCurrentTime(playback.currentTime || 0);
+                  setIsPlaying(playback.isPlaying || false);
+                  setVolume(playback.volume || 1);
+                  setIsMuted(playback.isMuted || false);
+                }
+
+                // Create YouTube player with current state
+                createYouTubePlayer(id, playback?.currentTime || 0, false, true)
+                  .then((player) => {
+                    setTimeout(() => {
+                      try {
+                        player?.unMute?.();
+                        if (playback?.isPlaying) {
+                          player?.playVideo();
+                        } else {
+                          // Show resume button if video should be playing but isn't
+                          if (playback?.isPlaying) {
+                            setShowResumeButton(true);
+                          }
+                        }
+                      } catch {
+                        // Show resume button if there's an error playing
+                        if (playback?.isPlaying) {
+                          setShowResumeButton(true);
+                        }
+                      }
+                    }, 500);
+                  })
+                  .catch(() => {
+                    // Show resume button if player creation fails but should be playing
+                    if (playback?.isPlaying) {
+                      setShowResumeButton(true);
+                    }
+                  });
+              }
             } else {
               setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
               if (videoRef.current) webrtcManager.setVideoElement(videoRef.current);
-              if (playback?.isPlaying) setTimeout(() => tryPlayVideo(), 300);
+              if (playback?.isPlaying) {
+                setTimeout(() => {
+                  tryPlayVideo().catch(() => {
+                    // Show resume button if video fails to play but should be playing
+                    setShowResumeButton(true);
+                  });
+                }, 300);
+              }
+            }
+
+            // Show resume button if video should be playing but we're not in playing state
+            if (playback?.isPlaying && !isPlaying) {
+              setTimeout(() => {
+                if (!isPlaying && playback.isPlaying) {
+                  setShowResumeButton(true);
+                }
+              }, 2000); // Wait 2 seconds to see if video starts playing
             }
           }
         });
@@ -361,6 +429,15 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         if (data.success) {
           setRoomInfo(data.room);
           setParticipants(data.room.participants || []);
+
+          // Request current video state after joining (for refresh handling)
+          if (currentUser.id !== data.room.host?.id) {
+            setTimeout(() => {
+              for (let i = 0; i < 5; i++) {
+                setTimeout(() => socketManager.sendVideoStateRequest(), 500 * i);
+              }
+            }, 1000);
+          }
         }
       } catch (e) {
         console.error("init error", e);
@@ -808,6 +885,68 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Simple resume button - show after refresh for non-host users
+  useEffect(() => {
+    if (!isHost && user && roomInfo) {
+      // Show resume button after page load for non-host users
+      const timer = setTimeout(() => {
+        setShowResumeButton(true);
+      }, 2000); // Show after 2 seconds
+
+      return () => clearTimeout(timer);
+    }
+  }, [isHost, user, roomInfo]);
+
+  // Hide resume button when video starts playing
+  useEffect(() => {
+    if (isPlaying) {
+      setShowResumeButton(false);
+    }
+  }, [isPlaying]);
+
+  // Handle refresh - request video state when component is ready
+  useEffect(() => {
+    if (!isHost && user && roomInfo) {
+      console.log("Requesting video state after refresh/mount");
+      // Multiple requests to ensure we get the current state
+      const requestState = () => {
+        for (let i = 0; i < 6; i++) {
+          setTimeout(() => {
+            socketManager.sendVideoStateRequest();
+            console.log("Requesting video state", i + 1);
+          }, 500 * i + 500);
+        }
+      };
+
+      requestState();
+
+      // Also request again after a longer delay in case socket wasn't ready
+      setTimeout(requestState, 3000);
+    }
+  }, [isHost, user, roomInfo]);
+
+  // YouTube time tracking for progress bar
+  useEffect(() => {
+    if (currentVideoType !== "youtube") return;
+
+    const updateYouTubeTime = () => {
+      const player = getYTPlayer();
+      if (player && player.getCurrentTime && player.getDuration) {
+        try {
+          const currentTime = player.getCurrentTime();
+          const duration = player.getDuration();
+          setCurrentTime(currentTime);
+          setDuration(duration);
+        } catch (e) {
+          // Player might not be ready yet
+        }
+      }
+    };
+
+    const interval = setInterval(updateYouTubeTime, 1000);
+    return () => clearInterval(interval);
+  }, [currentVideoType, youtubeVideoId]);
+
   // Ephemeral messages (floating) behavior:
   const lastMessageIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -939,6 +1078,25 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             {currentVideoType === "screen" && isHost && (
               <div className="absolute top-4 right-4">
                 <Button onClick={handleStopScreenShare} variant="destructive" size="sm" className="bg-red-600 hover:bg-red-700"><StopCircle className="mr-2 h-4 w-4" />Stop Sharing</Button>
+              </div>
+            )}
+
+            {/* Simple Resume Button - shows after refresh for non-host users */}
+            {showResumeButton && !isHost && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
+                <div className="bg-gray-800 rounded-lg p-4 text-center">
+                  <p className="text-white mb-3">Resume Playing</p>
+                  <Button
+                    onClick={() => {
+                      setShowResumeButton(false);
+                     
+                      togglePlayPause();
+                    }}
+                    className="bg-purple-600 hover:bg-purple-700"
+                  >
+                    <Play className="mr-2 h-4 w-4" /> Resume
+                  </Button>
+                </div>
               </div>
             )}
 
