@@ -17,6 +17,10 @@ import Chat from "@/lib/chat";
 import { socketManager, type SocketMessage, type Participant, type RoomInfo } from "@/lib/socket";
 import { webrtcManager } from "@/lib/webrtc";
 import { getToken, getCurrentUser } from "@/lib/auth";
+import router from "next/router";
+import { error } from "console";
+import router from "next/router";
+import { init } from "next/dist/compiled/webpack/webpack";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -32,6 +36,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ytContainerRef = useRef<HTMLDivElement | null>(null);
+  const ytPlayerInstanceRef = useRef<any>(null);
+  const [youtubeContainerKey, setYoutubeContainerKey] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
@@ -42,6 +48,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [youtubeVideoId, setYoutubeVideoId] = useState<string | null>(null);
   const [isLoadingVideo, setIsLoadingVideo] = useState(false);
+  const [youtubeError, setYoutubeError] = useState<string | null>(null);
+  const [ytPlayerReady, setYtPlayerReady] = useState(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -55,7 +63,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const [message, setMessage] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
-  const [showResumeOverlay, setShowResumeOverlay] = useState(false);
   const [showResumeButton, setShowResumeButton] = useState(false);
 
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
@@ -83,6 +90,298 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [ephemeralMessages, setEphemeralMessages] = useState<Array<{ id: string; text: string }>>([]);
 
   const isHost = user?.id === roomInfo?.host?.id;
+
+  // YouTube utility functions
+  const extractYouTubeId = (url: string): string | null => {
+    if (!url) return null;
+
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|m\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})/,
+      /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match && match[1] && match[1].length === 11) {
+        return match[1];
+      }
+    }
+
+    return null;
+  };
+
+  // YouTube API loading
+  const ytApiLoadedRef = useRef<Promise<void> | null>(null);
+  const loadYouTubeAPI = useCallback(() => {
+    if (ytApiLoadedRef.current) return ytApiLoadedRef.current;
+
+    ytApiLoadedRef.current = new Promise((resolve) => {
+      if ((window as any).YT && (window as any).YT.Player) {
+        resolve();
+        return;
+      }
+
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      (window as any).onYouTubeIframeAPIReady = () => resolve();
+      document.head.appendChild(tag);
+    });
+
+    return ytApiLoadedRef.current;
+  }, []);
+
+  // YouTube player management
+  const getYTPlayer = () => ytPlayerInstanceRef.current;
+  const setYTPlayer = (player: any) => {
+    ytPlayerInstanceRef.current = player;
+  };
+
+  // Simple container recreation using React key
+  const recreateYouTubeContainer = useCallback(() => {
+    setYoutubeContainerKey(prev => prev + 1);
+    ytContainerRef.current = null;
+    console.log('YouTube container recreated');
+  }, []);
+
+  // Create YouTube player
+  const createYouTubePlayer = useCallback(async (videoId: string, startTime = 0, autoplay = false) => {
+    try {
+      console.log(`Creating YouTube player: ${videoId}, startTime: ${startTime}, autoplay: ${autoplay}, isHost: ${isHost}`);
+
+      await loadYouTubeAPI();
+      if (!ytContainerRef.current) return null;
+
+      // Destroy existing player first
+      const existingPlayer = getYTPlayer();
+      if (existingPlayer) {
+        try {
+          existingPlayer.destroy();
+          setYTPlayer(null);
+        } catch (e) {
+          console.warn("Error destroying existing player:", e);
+        }
+      }
+
+      setYtPlayerReady(false);
+      setYoutubeError(null);
+
+      // Ensure container exists
+      if (!ytContainerRef.current) {
+        console.warn("YouTube container not available, cannot create player");
+        return null;
+      }
+
+      const player = new (window as any).YT.Player(ytContainerRef.current, {
+        height: "100%",
+        width: "100%",
+        videoId,
+        playerVars: {
+          autoplay: autoplay ? 1 : 0,
+          controls: 1,
+          rel: 0,
+          start: Math.floor(startTime),
+          enablejsapi: 1,
+          origin: window.location.origin,
+          playsinline: 1,
+          modestbranding: 1,        // Hide YouTube logo
+          showinfo: 0,              // Hide video title and uploader
+          fs: 0,                    // Hide fullscreen button
+          cc_load_policy: 0,        // Hide closed captions
+          iv_load_policy: 3,        // Hide video annotations
+          disablekb: 1,             // Disable keyboard controls
+          color: 'white',           // Use white progress bar
+          theme: 'dark'             // Use dark theme
+        },
+        events: {
+          onReady: (event: any) => {
+            console.log("YouTube player ready", { isHost, autoplay, videoId });
+            setYtPlayerReady(true);
+            setIsLoadingVideo(false);
+
+            try {
+              const duration = event.target.getDuration();
+              if (duration) setDuration(duration);
+            } catch (e) { console.warn("Error getting duration:", e); }
+
+            if (autoplay) {
+              try {
+                event.target.playVideo();
+                setIsPlaying(true);
+                console.log("YouTube autoplay started");
+              } catch (e) { console.warn("Autoplay failed:", e); }
+            } else {
+              console.log("YouTube player ready but not autoplaying (waiting for sync)");
+            }
+
+            // Force set ready state to ensure sync works
+            setTimeout(() => {
+              setYtPlayerReady(true);
+              console.log("YouTube player ready state confirmed");
+            }, 100);
+          },
+          onStateChange: (event: any) => {
+            const state = event.data;
+            const YT = (window as any).YT;
+
+            console.log("YouTube state change:", state, "isHost:", isHost);
+
+            if (state === YT.PlayerState.PLAYING) {
+              setIsPlaying(true);
+              if (isHost) {
+                const currentTime = event.target.getCurrentTime();
+                console.log("Host: YouTube started playing, broadcasting");
+                socketManager.playVideo(currentTime);
+                // Also send state sync for YouTube
+                socketManager.sendVideoStateSync({
+                  metadata: { name: `YouTube Video`, type: "youtube", url: youtubeUrl },
+                  playbackState: {
+                    currentTime,
+                    isPlaying: true,
+                    volume,
+                    isMuted
+                  }
+                });
+              }
+            } else if (state === YT.PlayerState.PAUSED) {
+              setIsPlaying(false);
+              if (isHost) {
+                console.log("Host: YouTube paused, broadcasting");
+                socketManager.pauseVideo();
+                // Also send state sync for YouTube
+                socketManager.sendVideoStateSync({
+                  metadata: { name: `YouTube Video`, type: "youtube", url: youtubeUrl },
+                  playbackState: {
+                    currentTime: event.target.getCurrentTime(),
+                    isPlaying: false,
+                    volume,
+                    isMuted
+                  }
+                });
+              }
+            } else if (state === YT.PlayerState.ENDED) {
+              setIsPlaying(false);
+              if (isHost) {
+                console.log("Host: YouTube ended, broadcasting");
+                socketManager.pauseVideo();
+              }
+            }
+
+            // Update time and duration
+            try {
+              const currentTime = event.target.getCurrentTime();
+              const duration = event.target.getDuration();
+              if (currentTime !== undefined) setCurrentTime(currentTime);
+              if (duration !== undefined) setDuration(duration);
+            } catch (e) { console.warn("Error updating time:", e); }
+          },
+          onError: (event: any) => {
+            console.error("YouTube player error:", event.data);
+            const errorMessages: { [key: number]: string } = {
+              2: "Invalid video ID",
+              5: "HTML5 player error",
+              100: "Video not found or private",
+              101: "Video not allowed to be embedded",
+              150: "Video not allowed to be embedded"
+            };
+            setYoutubeError(errorMessages[event.data] || "Failed to load video");
+            setIsLoadingVideo(false);
+          }
+        }
+      });
+
+      setYTPlayer(player);
+      return player;
+    } catch (error) {
+      console.error("YouTube player creation error:", error);
+      setYoutubeError("Failed to create YouTube player");
+      setIsLoadingVideo(false);
+      return null;
+    }
+  }, [loadYouTubeAPI, isHost]);
+
+  // Handle YouTube URL input
+  const handleYouTubeUrlChange = (url: string) => {
+    setYoutubeUrl(url);
+
+    if (!url.trim()) {
+      setYoutubeVideoId(null);
+      setYoutubeError(null);
+      return;
+    }
+
+    const videoId = extractYouTubeId(url);
+    if (!videoId) {
+      setYoutubeError("Please enter a valid YouTube URL");
+      return;
+    }
+
+    setYoutubeVideoId(videoId);
+    setYoutubeError(null);
+
+    // Auto-load for host
+    if (isHost) {
+      loadYouTubeVideo(videoId, url);
+    }
+  };
+
+  // Load YouTube video (host only)
+  const loadYouTubeVideo = async (videoId: string, url: string) => {
+    if (!isHost) return;
+
+    console.log("Host loading YouTube video:", videoId);
+    setIsLoadingVideo(true);
+    setCurrentVideoType("youtube");
+
+    try {
+      // Stop other video types
+      try { webrtcManager.stopFileStream(); } catch (e) { }
+      try { webrtcManager.stopScreenShare(); } catch (e) { }
+      setSelectedVideoFile(null);
+
+      // Create YouTube player
+      const player = await createYouTubePlayer(videoId, 0, true);
+
+      if (player) {
+        // Send metadata to all participants
+        socketManager.sendVideoMetadata({
+          name: `YouTube Video`,
+          size: 0,
+          type: "youtube",
+          url: url
+        });
+
+        // Send initial state after a delay
+        setTimeout(() => {
+          try {
+            const currentTime = player.getCurrentTime ? player.getCurrentTime() : 0;
+            const playerState = player.getPlayerState ? player.getPlayerState() : 1;
+            const isPlaying = playerState === 1;
+
+            console.log("Host broadcasting initial YouTube state:", { currentTime, isPlaying });
+
+            socketManager.sendVideoStateSync({
+              metadata: { name: `YouTube Video`, type: "youtube", url: url },
+              playbackState: {
+                currentTime,
+                isPlaying,
+                volume,
+                isMuted
+              }
+            });
+          } catch (e) {
+            console.warn("Error broadcasting initial state:", e);
+          }
+        }, 2000);
+      }
+    } catch (error) {
+      console.error("Error loading YouTube video:", error);
+      setYoutubeError("Failed to load YouTube video");
+      setIsLoadingVideo(false);
+    }
+  };
 
   // Generate invite link and room code
   const generateInviteLink = async () => {
@@ -126,67 +425,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(inviteLink)}`, '_blank');
   };
 
-  const extractYouTubeId = (url: string): string | null => {
-    if (!url) return null;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return match && match[2] && match[2].length === 11 ? match[2] : null;
-  };
 
-  const ytApiLoadedRef = useRef<Promise<void> | null>(null);
-  const loadYouTubeAPI = useCallback(() => {
-    if (ytApiLoadedRef.current) return ytApiLoadedRef.current;
-    ytApiLoadedRef.current = new Promise((resolve) => {
-      if ((window as any).YT && (window as any).YT.Player) {
-        resolve();
-        return;
-      }
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      (window as any).onYouTubeIframeAPIReady = () => resolve();
-      document.head.appendChild(tag);
-    });
-    return ytApiLoadedRef.current;
-  }, []);
-
-  const getYTPlayer = () => (ytContainerRef.current as any)?._ytPlayer || null;
-  const setYTPlayer = (p: any) => { if (ytContainerRef.current) (ytContainerRef.current as any)._ytPlayer = p; };
-
-  const createYouTubePlayer = useCallback(async (videoId: string, start = 0, autoplay = false, muted = false) => {
-    await loadYouTubeAPI();
-    if (!ytContainerRef.current) return null;
-    const prev = getYTPlayer();
-    try { prev?.destroy?.(); } catch { }
-    try {
-      const player = new (window as any).YT.Player(ytContainerRef.current, {
-        height: "100%",
-        width: "100%",
-        videoId,
-        playerVars: { autoplay: autoplay ? 1 : 0, controls: 1, rel: 0, start: Math.floor(start) },
-        events: {
-          onReady: (e: any) => {
-            if (muted) { try { e.target.mute(); } catch { } }
-            if (autoplay) { try { e.target.playVideo(); } catch { } }
-          },
-          onStateChange: (e: any) => {
-            if (!isHost) return;
-            const state = e.data;
-            if (state === 1) {
-              const ct = e.target.getCurrentTime ? e.target.getCurrentTime() : 0;
-              socketManager.playVideo(ct);
-            } else if (state === 2) {
-              socketManager.pauseVideo();
-            }
-          }
-        }
-      });
-      setYTPlayer(player);
-      return player;
-    } catch (e) {
-      console.error("YT player create error", e);
-      return null;
-    }
-  }, [loadYouTubeAPI, isHost]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -277,6 +516,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onRoomInfo((room) => {
           if (!mounted) return;
+          console.log("Room info received:", {
+            roomHost: room.host,
+            currentUserId: currentUser.id,
+            isHostCalculation: currentUser.id === room.host?.id
+          });
           setRoomInfo(room);
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
@@ -300,8 +544,22 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             if (msg.message) {
               const parsed = JSON.parse(msg.message);
               if (parsed?.type === "user-joined") return;
+
+              // Handle refresh message for non-host users
+              if (parsed?.type === "refresh-page") {
+                // Check if message is from a different user (not from self)
+                const isFromSelf = msg.user?.id === user?.id;
+
+                if (!isFromSelf) {
+                  console.log("Received refresh message from host, reloading page...");
+                  window.location.reload();
+                  return;
+                }
+              }
             }
-          } catch { }
+          } catch (e) {
+            console.log("Message parsing error:", e);
+          }
           if (msg.type === "voice" && msg.audioUrl) {
             if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
           }
@@ -313,88 +571,213 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
         socketManager.onVideoMetadata((metadata) => {
           if (!mounted) return;
-          console.log("Received video metadata:", metadata);
+          console.log("Non-host received video metadata:", metadata);
 
-          if (!isHost) {
+          // For now, always process metadata if it's YouTube (since the host detection is broken)
+          // TODO: Fix host detection properly
+          const shouldProcessMetadata = metadata.type === "youtube" || !isHost;
+
+          console.log("Metadata processing check:", {
+            isHost,
+            metadataType: metadata.type,
+            shouldProcessMetadata
+          });
+
+          if (shouldProcessMetadata) {
             if (metadata.type === "youtube") {
               const id = extractYouTubeId(metadata.url || "");
               if (id) {
+                console.log("Non-host: Setting up YouTube video", id);
                 setYoutubeVideoId(id);
                 setYoutubeUrl(metadata.url || "");
                 setCurrentVideoType("youtube");
+                setYoutubeError(null);
+
+                console.log("Non-host: Creating YouTube player for video ID:", id);
+                // Create YouTube player for non-host (don't autoplay, wait for sync)
+                createYouTubePlayer(id, 0, false)
+                  .then((player) => {
+                    if (player) {
+                      console.log("Non-host: YouTube player created, requesting state");
+                      // Request current state from host
+                      setTimeout(() => socketManager.sendVideoStateRequest(), 1000);
+                      setTimeout(() => socketManager.sendVideoStateRequest(), 2000);
+                    }
+                  })
+                  .catch((e) => {
+                    console.error("Non-host YouTube player creation failed:", e);
+                    setYoutubeError("Failed to load YouTube video");
+                  });
               }
             } else if (metadata.type === "screen") {
+              // Cleanup YouTube when switching to screen share
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                  console.warn("Error destroying YouTube player:", e);
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
+              setYoutubeError(null);
               setCurrentVideoType("screen");
             } else if (metadata.type === "file" || metadata.type.startsWith("video/")) {
+              // Cleanup YouTube when switching to file
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                  console.warn("Error destroying YouTube player:", e);
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
+              setYoutubeError(null);
               setCurrentVideoType("file");
             } else if (metadata.type === "stopped") {
+              // Cleanup YouTube when stopping
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                  console.warn("Error destroying YouTube player:", e);
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
               setCurrentVideoType(null);
               setYoutubeVideoId(null);
               setYoutubeUrl("");
+              setYoutubeError(null);
             }
 
             if (videoRef.current && metadata.type !== "youtube") {
               try { webrtcManager.setVideoElement(videoRef.current); } catch { }
             }
 
-            // Request current state after metadata change
-            for (let i = 0; i < 4; i++) {
-              setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
+            // Request current state for non-YouTube videos
+            if (metadata.type !== "youtube") {
+              for (let i = 0; i < 4; i++) {
+                setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
+              }
             }
           }
         });
 
         socketManager.onVideoStateSync((data) => {
           if (!mounted) return;
-          console.log("Received video state sync:", data);
+          console.log("Non-host received video state sync:", data);
           const vs = data.videoState || data;
           const metadata = vs.metadata || data.metadata;
           const playback = vs.playbackState || data.playbackState;
 
-          if (!isHost && metadata) {
+          // Check if this sync is from another user (meaning we're not the host)
+          const isFromOtherUser = data.from && data.from !== user?.id;
+          // IMPORTANT: Host should NEVER process sync data to avoid loops
+          // Use multiple checks to ensure host doesn't process its own data
+          const shouldProcessSync = !isHost && isFromOtherUser && metadata && playback && data.from;
+
+          console.log("Video state sync check:", {
+            isHost,
+            dataFrom: data.from,
+            currentUserId: user?.id,
+            isFromOtherUser,
+            hasMetadata: !!metadata,
+            hasPlayback: !!playback,
+            shouldProcessSync
+          });
+
+          if (shouldProcessSync) {
+            console.log("Non-host: Processing video state sync", {
+              metadata,
+              playback,
+              metadataType: metadata.type
+            });
+
             if (metadata.type === "youtube") {
-              const id = extractYouTubeId(metadata.url || "");
-              if (id) {
-                setYoutubeVideoId(id);
-                setYoutubeUrl(metadata.url || "");
-                setCurrentVideoType("youtube");
+              console.log("Non-host: Syncing YouTube state", playback);
 
-                // Update playback state
-                if (playback) {
-                  setCurrentTime(playback.currentTime || 0);
-                  setIsPlaying(playback.isPlaying || false);
-                  setVolume(playback.volume || 1);
-                  setIsMuted(playback.isMuted || false);
-                }
+              // Update local state
+              setCurrentTime(playback.currentTime || 0);
+              setIsPlaying(playback.isPlaying || false);
+              setVolume(playback.volume || 1);
+              setIsMuted(playback.isMuted || false);
 
-                // Create YouTube player with current state
-                createYouTubePlayer(id, playback?.currentTime || 0, false, true)
-                  .then((player) => {
-                    setTimeout(() => {
-                      try {
-                        player?.unMute?.();
-                        if (playback?.isPlaying) {
-                          player?.playVideo();
-                        } else {
-                          // Show resume button if video should be playing but isn't
-                          if (playback?.isPlaying) {
-                            setShowResumeButton(true);
-                          }
-                        }
-                      } catch {
-                        // Show resume button if there's an error playing
-                        if (playback?.isPlaying) {
-                          setShowResumeButton(true);
-                        }
-                      }
-                    }, 500);
-                  })
-                  .catch(() => {
-                    // Show resume button if player creation fails but should be playing
-                    if (playback?.isPlaying) {
-                      setShowResumeButton(true);
-                    }
+              // Sync existing YouTube player
+              const player = getYTPlayer();
+              console.log("Non-host: YouTube sync debug", {
+                hasPlayer: !!player,
+                ytPlayerReady,
+                youtubeVideoId,
+                playbackState: playback
+              });
+
+              if (player && ytPlayerReady) {
+                try {
+                  console.log("Non-host: Applying YouTube sync", {
+                    currentTime: playback.currentTime,
+                    isPlaying: playback.isPlaying
                   });
+
+                  // Set volume and mute
+                  if (playback.volume !== undefined) {
+                    player.setVolume((playback.volume || 1) * 100);
+                  }
+
+                  if (playback.isMuted) {
+                    player.mute();
+                  } else {
+                    player.unMute();
+                  }
+
+                  // Sync playback state
+                  if (playback.isPlaying) {
+                    player.seekTo(playback.currentTime || 0, true);
+                    player.playVideo();
+                    setIsPlaying(true);
+                    console.log("Non-host: YouTube play command sent");
+                  } else {
+                    player.seekTo(playback.currentTime || 0, true);
+                    player.pauseVideo();
+                    setIsPlaying(false);
+                    console.log("Non-host: YouTube pause command sent");
+                  }
+                } catch (e) {
+                  console.warn("YouTube sync error:", e);
+                }
+              } else {
+                // Player exists but not ready, try once more after a delay
+                console.log("Non-host: YouTube player not ready, will retry once");
+                setTimeout(() => {
+                  const retryPlayer = getYTPlayer();
+                  if (retryPlayer) {
+                    try {
+                      console.log("Non-host: Retrying YouTube sync");
+                      if (playback.isPlaying) {
+                        retryPlayer.seekTo(playback.currentTime || 0, true);
+                        retryPlayer.playVideo();
+                        setIsPlaying(true);
+                      } else {
+                        retryPlayer.seekTo(playback.currentTime || 0, true);
+                        retryPlayer.pauseVideo();
+                        setIsPlaying(false);
+                      }
+                    } catch (e) {
+                      console.warn("YouTube retry sync error:", e);
+                    }
+                  }
+                }, 1000);
               }
             } else {
               setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
@@ -402,20 +785,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               if (playback?.isPlaying) {
                 setTimeout(() => {
                   tryPlayVideo().catch(() => {
-                    // Show resume button if video fails to play but should be playing
                     setShowResumeButton(true);
                   });
                 }, 300);
               }
-            }
-
-            // Show resume button if video should be playing but we're not in playing state
-            if (playback?.isPlaying && !isPlaying) {
-              setTimeout(() => {
-                if (!isPlaying && playback.isPlaying) {
-                  setShowResumeButton(true);
-                }
-              }, 2000); // Wait 2 seconds to see if video starts playing
             }
           }
         });
@@ -449,6 +822,29 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     init();
     return () => {
       mounted = false;
+
+      // Cleanup YouTube player before unmounting
+      const existingPlayer = getYTPlayer();
+      if (existingPlayer) {
+        try {
+          existingPlayer.destroy();
+          setYTPlayer(null);
+        } catch (e) {
+          console.warn("Error destroying YouTube player on unmount:", e);
+        }
+      }
+
+      // Reset container key for next mount
+      setYoutubeContainerKey(0); yer = getYTPlayer();
+      if (existingPlayer) {
+        try {
+          existingPlayer.destroy();
+          setYTPlayer(null);
+        } catch (e) {
+          console.warn("Error destroying YouTube player on unmount:", e);
+        }
+      }
+
       socketManager.leaveRoom();
       webrtcManager.cleanup();
     };
@@ -457,19 +853,45 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const handleVideoControl = (data: any) => {
     if (!data) return;
+
+    console.log("Non-host received video control:", data);
+
     if (data.type && currentVideoType === "youtube") {
       const player = getYTPlayer();
-      if (!player) return;
-      if (data.type === "play") { try { player.seekTo(data.currentTime || 0, true); player.playVideo(); } catch { } }
-      if (data.type === "pause") { try { player.pauseVideo(); } catch { } }
-      if (data.type === "seek") { try { player.seekTo(data.time || 0, true); } catch { } }
+      if (!player) {
+        console.warn("YouTube player not available for control");
+        return;
+      }
+
+      try {
+        if (data.type === "play") {
+          player.seekTo(data.currentTime || 0, true);
+          player.playVideo();
+          setIsPlaying(true);
+          setCurrentTime(data.currentTime || 0);
+        } else if (data.type === "pause") {
+          player.pauseVideo();
+          setIsPlaying(false);
+        } else if (data.type === "seek") {
+          player.seekTo(data.time || 0, true);
+          setCurrentTime(data.time || 0);
+        }
+      } catch (e) {
+        console.error("YouTube control error:", e);
+      }
       return;
     }
+
     if (!videoRef.current) return;
+
     try {
       if (data.type === "play") {
         videoRef.current.currentTime = data.currentTime || 0;
-        videoRef.current.play().catch(() => setShowResumeOverlay(true));
+        videoRef.current.play().catch(() => {
+          if (currentVideoType !== "youtube") {
+            setShowResumeButton(true);
+          }
+        });
         setIsPlaying(true);
       } else if (data.type === "pause") {
         videoRef.current.pause();
@@ -477,7 +899,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       } else if (data.type === "seek") {
         videoRef.current.currentTime = data.time || 0;
       }
-    } catch (e) { console.error("handleVideoControl", e); }
+    } catch (e) {
+      console.error("handleVideoControl", e);
+    }
   };
 
   useEffect(() => {
@@ -508,6 +932,18 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const handleShareScreen = async () => {
     try {
+      // If switching from YouTube, send refresh message to non-host users
+      if (currentVideoType === "youtube" && youtubeVideoId) {
+        console.log("Host: Sending refresh message to non-host users");
+        socketManager.sendMessage(JSON.stringify({ type: "refresh-page", reason: "youtube-to-screen" }), false);
+      }
+
+      // Clear YouTube state when switching to screen share
+      setYoutubeUrl("");
+      setYoutubeVideoId(null);
+      setYoutubeError(null);
+      recreateYouTubeContainer();
+
       setIsLoadingVideo(true);
 
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -555,12 +991,35 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     } catch (e) { console.warn(e); }
   };
 
-  const handleSelectVideo = () => fileInputRef.current?.click();
+  const handleSelectVideo = () => {
+    // If switching from YouTube, send refresh message to non-host users
+    if (currentVideoType === "youtube" && youtubeVideoId) {
+      console.log("Host: Sending refresh message to non-host users");
+      socketManager.sendMessage(JSON.stringify({ type: "refresh-page", reason: "youtube-to-file" }), false);
+    }
+
+    // Clear YouTube state when switching to file
+    setYoutubeUrl("");
+    setYoutubeVideoId(null);
+    setYoutubeError(null);
+    recreateYouTubeContainer();
+
+    fileInputRef.current?.click();
+  };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("video/")) { setError("Please select a video file"); return; }
+
+    console.log("handleFileSelect - File selected:", file.name);
+
+    // Clear YouTube state when switching to file
+    setYoutubeUrl("");
+    setYoutubeVideoId(null);
+    setYoutubeError(null);
+    recreateYouTubeContainer();
+
     setSelectedVideoFile(file);
     setCurrentVideoType("file");
     setIsLoadingVideo(true);
@@ -575,6 +1034,96 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }, 200);
     setIsLoadingVideo(false);
   };
+
+  // Periodic state broadcasting for YouTube (host only)
+  useEffect(() => {
+    if (!isHost || currentVideoType !== "youtube" || !ytPlayerReady) return;
+
+    const broadcastState = () => {
+      const player = getYTPlayer();
+      if (player) {
+        try {
+          const currentTime = player.getCurrentTime();
+          const playerState = player.getPlayerState();
+          const isPlaying = playerState === 1;
+
+          socketManager.sendVideoStateSync({
+            metadata: { name: `YouTube Video`, type: "youtube", url: youtubeUrl },
+            playbackState: {
+              currentTime,
+              isPlaying,
+              volume,
+              isMuted
+            }
+          });
+        } catch (e) {
+          console.warn("Error broadcasting YouTube state:", e);
+        }
+      }
+    };
+
+    // Broadcast state every 10 seconds for new joiners (reduced frequency since we broadcast on state changes)
+    const interval = setInterval(broadcastState, 10000);
+
+    return () => clearInterval(interval);
+  }, [isHost, currentVideoType, ytPlayerReady, youtubeUrl, volume, isMuted]);
+
+  // Handle video state requests from non-host users
+  useEffect(() => {
+    if (!isHost) return;
+
+    const handleStateRequest = () => {
+      if (currentVideoType === "youtube" && ytPlayerReady) {
+        const player = getYTPlayer();
+        if (player) {
+          try {
+            const currentTime = player.getCurrentTime();
+            const playerState = player.getPlayerState();
+            const isPlaying = playerState === 1;
+
+            console.log("Host responding to state request:", { currentTime, isPlaying });
+
+            socketManager.sendVideoStateSync({
+              metadata: { name: `YouTube Video`, type: "youtube", url: youtubeUrl },
+              playbackState: {
+                currentTime,
+                isPlaying,
+                volume,
+                isMuted
+              }
+            });
+          } catch (e) {
+            console.warn("Error responding to state request:", e);
+          }
+        }
+      }
+    };
+
+    const cleanup = socketManager.onHostVideoStateRequest?.(handleStateRequest);
+    return cleanup;
+  }, [isHost, currentVideoType, ytPlayerReady, youtubeUrl, volume, isMuted]);
+
+  // YouTube time tracking
+  useEffect(() => {
+    if (currentVideoType !== "youtube" || !ytPlayerReady) return;
+
+    const updateTime = () => {
+      const player = getYTPlayer();
+      if (player) {
+        try {
+          const currentTime = player.getCurrentTime();
+          const duration = player.getDuration();
+          if (currentTime !== undefined) setCurrentTime(currentTime);
+          if (duration !== undefined) setDuration(duration);
+        } catch (e) {
+          // Player might not be ready
+        }
+      }
+    };
+
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, [currentVideoType, ytPlayerReady]);
 
   const hasStartedStreamingRef = useRef(false);
   useEffect(() => {
@@ -606,39 +1155,78 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const togglePlayPause = async () => {
     if (currentVideoType === "youtube") {
       const player = getYTPlayer();
-      if (!player) return;
-      const state = player.getPlayerState ? player.getPlayerState() : null;
-      if (state === 1) {
-        try { player.pauseVideo(); } catch { }
-        setIsPlaying(false);
-        if (isHost) socketManager.pauseVideo();
-      } else {
-        try { player.playVideo(); } catch { setShowResumeOverlay(true); }
-        setIsPlaying(true);
-        if (isHost) { const ct = player.getCurrentTime ? player.getCurrentTime() : 0; socketManager.playVideo(ct); }
+      if (!player) {
+        console.warn("YouTube player not available");
+        return;
+      }
+
+      try {
+        const state = player.getPlayerState ? player.getPlayerState() : null;
+        const YT = (window as any).YT;
+
+        if (state === YT.PlayerState.PLAYING) {
+          player.pauseVideo();
+          setIsPlaying(false);
+          if (isHost) socketManager.pauseVideo();
+        } else {
+          player.playVideo();
+          setIsPlaying(true);
+          if (isHost) {
+            const ct = player.getCurrentTime ? player.getCurrentTime() : 0;
+            socketManager.playVideo(ct);
+          }
+        }
+      } catch (e) {
+        console.error("YouTube play/pause error:", e);
       }
       return;
     }
+
     if (!videoRef.current) return;
+
     if (isPlaying) {
       videoRef.current.pause();
       setIsPlaying(false);
       if (isHost) socketManager.pauseVideo();
     } else {
-      try { await videoRef.current.play(); } catch (e: any) { if (e?.name === "NotAllowedError") setShowResumeOverlay(true); }
-      setIsPlaying(true);
-      if (isHost) socketManager.playVideo(videoRef.current.currentTime);
+      try {
+        await videoRef.current.play();
+        setIsPlaying(true);
+        if (isHost) socketManager.playVideo(videoRef.current.currentTime);
+      } catch (e: any) {
+        if (e?.name === "NotAllowedError") setShowResumeButton(true);
+      }
     }
   };
 
   const toggleMute = () => {
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (!player) return;
+
+      try {
+        if (isMuted) {
+          player.unMute();
+          setIsMuted(false);
+        } else {
+          player.mute();
+          setIsMuted(true);
+        }
+      } catch (e) {
+        console.error("YouTube mute error:", e);
+      }
+      return;
+    }
+
     if (!videoRef.current) return;
+
     if (isHost) {
       const newMuted = !isMuted;
       webrtcManager.setLocalMuted(newMuted);
       setIsMuted(newMuted);
       return;
     }
+
     videoRef.current.muted = !isMuted;
     setIsMuted(!isMuted);
   };
@@ -646,12 +1234,30 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.target.value);
     setVolume(v);
+    setIsMuted(v === 0);
+
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (player) {
+        try {
+          player.setVolume(v * 100); // YouTube expects 0-100
+          if (v === 0) {
+            player.mute();
+          } else {
+            player.unMute();
+          }
+        } catch (e) {
+          console.error("YouTube volume error:", e);
+        }
+      }
+      return;
+    }
+
     if (isHost) {
       webrtcManager.setLocalVolume(v);
     } else if (videoRef.current) {
       videoRef.current.volume = v;
     }
-    setIsMuted(v === 0);
   };
 
   const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -698,9 +1304,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     try {
       await videoRef.current.play();
       setIsPlaying(true);
-      setShowResumeOverlay(false);
+      setShowResumeButton(false);
     } catch (e: any) {
-      if (e?.name === "NotAllowedError") setShowResumeOverlay(true);
+      if (e?.name === "NotAllowedError") setShowResumeButton(true);
     }
   };
 
@@ -901,9 +1507,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Simple resume button - show after refresh for non-host users
+  // Simple resume button - show after refresh for non-host users (only for non-YouTube videos)
   useEffect(() => {
-    if (!isHost && user && roomInfo) {
+    if (!isHost && user && roomInfo && currentVideoType !== "youtube") {
       // Show resume button after page load for non-host users
       const timer = setTimeout(() => {
         setShowResumeButton(true);
@@ -911,7 +1517,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       return () => clearTimeout(timer);
     }
-  }, [isHost, user, roomInfo]);
+  }, [isHost, user, roomInfo, currentVideoType]);
 
   // Hide resume button when video starts playing
   useEffect(() => {
@@ -919,6 +1525,82 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       setShowResumeButton(false);
     }
   }, [isPlaying]);
+
+  // Add CSS to hide YouTube UI elements
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      /* Hide YouTube branding and unwanted elements */
+      .ytp-chrome-top,
+      .ytp-show-cards-title,
+      .ytp-watermark,
+      .ytp-gradient-top,
+      .ytp-chrome-top-buttons,
+      .ytp-cards-button,
+      .ytp-endscreen-element,
+      .ytp-ce-element,
+      .ytp-suggested-action,
+      .ytp-pause-overlay,
+      .ytp-share-button-visible,
+      .ytp-watch-later-button,
+      .ytp-miniplayer-button,
+      .ytp-remote-button,
+      .ytp-size-button,
+      .ytp-subtitles-button,
+      .ytp-settings-button,
+      .ytp-pip-button,
+      .ytp-overflow-button,
+      .ytp-youtube-button,
+      .ytp-endscreen-content,
+      .ytp-ce-covering-overlay,
+      .ytp-ce-element-shadow,
+      .ytp-ce-covering-image,
+      .ytp-cards-teaser,
+      .ytp-cards-button-icon,
+      .ytp-cards-button-icon-default {
+        display: none !important;
+      }
+      
+      /* Hide YouTube title and channel info */
+      .ytp-title-channel,
+      .ytp-title-expanded-heading,
+      .ytp-title-expanded-content {
+        display: none !important;
+      }
+    `;
+
+    document.head.appendChild(style);
+
+    return () => {
+      try {
+        if (document.head.contains(style)) {
+          document.head.removeChild(style);
+        }
+      } catch (e) {
+        console.warn("Error removing style:", e);
+      }
+    };
+  }, []);
+
+  // Clean up YouTube player when video type changes
+  useEffect(() => {
+    if (currentVideoType !== "youtube") {
+      const existingPlayer = getYTPlayer();
+      if (existingPlayer) {
+        try {
+          existingPlayer.destroy();
+          setYTPlayer(null);
+          setYtPlayerReady(false);
+          console.log("YouTube player cleaned up due to video type change");
+        } catch (e) {
+          console.warn("Error cleaning up YouTube player:", e);
+        }
+      }
+
+      // Recreate container to ensure clean state for next YouTube video
+      recreateYouTubeContainer();
+    }
+  }, [currentVideoType, recreateYouTubeContainer]);
 
   // Handle refresh - request video state when component is ready
   useEffect(() => {
@@ -1029,8 +1711,36 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         <div className="bg-gray-900 border-b border-gray-800 px-4 py-3">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 flex gap-2">
-              <Input placeholder="Paste YouTube URL here (auto-plays when pasted)..." value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-400" />
-              <div className="flex items-center px-3 bg-red-600/20 rounded-md"><Youtube className="h-4 w-4 text-red-400" /></div>
+              <div className="relative flex-1">
+                <Input
+                  placeholder="Paste YouTube URL here (auto-plays when pasted)..."
+                  value={youtubeUrl}
+                  onChange={(e) => handleYouTubeUrlChange(e.target.value)}
+                  className={`bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 pr-10 ${youtubeError ? 'border-red-500' : youtubeVideoId ? 'border-green-500' : ''
+                    }`}
+                  disabled={isLoadingVideo}
+                />
+                {isLoadingVideo && (
+                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                  </div>
+                )}
+                {youtubeError && (
+                  <div className="absolute top-full left-0 mt-1 text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded z-10">
+                    {youtubeError}
+                  </div>
+                )}
+                {youtubeVideoId && !youtubeError && (
+                  <div className="absolute top-full left-0 mt-1 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded z-10">
+                    ✓ Valid YouTube URL - Video loaded
+                  </div>
+                )}
+              </div>
+              <div className={`flex items-center px-3 rounded-md ${youtubeVideoId && !youtubeError ? 'bg-green-600/20' : 'bg-red-600/20'
+                }`}>
+                <Youtube className={`h-4 w-4 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
+                  }`} />
+              </div>
             </div>
             <div className="flex gap-2">
               {!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && (
@@ -1049,7 +1759,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           <div className="flex-1 relative bg-gray-900 flex items-center justify-center" style={{ minHeight: 240 }}>
             <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
               {currentVideoType === "youtube" && youtubeVideoId ? (
-                <div ref={ytContainerRef} className="w-full h-full" />
+                <div key={youtubeContainerKey} className="w-full h-full" suppressHydrationWarning={true}>
+                  <div
+                    ref={ytContainerRef}
+                    className="w-full h-full"
+                    suppressHydrationWarning={true}
+                  />
+                </div>
               ) : (
                 <video ref={bindVideo as any} className="w-full h-full object-contain bg-black" autoPlay playsInline />
               )}
@@ -1099,8 +1815,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               </div>
             )}
 
-            {/* Simple Resume Button - shows after refresh for non-host users */}
-            {showResumeButton && !isHost && (
+            {/* Simple Resume Button - shows after refresh for non-host users (non-YouTube only) */}
+            {showResumeButton && !isHost && currentVideoType !== "youtube" && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
                 <div className="bg-gray-800 rounded-lg p-4 text-center">
                   <p className="text-white mb-3">Resume Playing</p>
@@ -1162,28 +1878,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       </div>
 
-      {showResumeOverlay && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 text-center">
-            <AlertCircle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
-            <h3 className="text-xl font-bold text-white mb-2">Video Ready to Play</h3>
-            <p className="text-gray-400 mb-4">Click below to resume playback</p>
-            <Button
-              onClick={async () => {
-                setShowResumeOverlay(false);
-                if (currentVideoType === "youtube" && youtubeVideoId) {
-                  await createYouTubePlayer(youtubeVideoId, currentTime || 0, true, false);
-                } else {
-                  try { await videoRef.current?.play(); } catch { }
-                }
-              }}
-              className="bg-purple-600 hover:bg-purple-700"
-            >
-              <Play className="mr-2 h-4 w-4" /> Resume Playback
-            </Button>
-          </div>
-        </div>
-      )}
+
 
       {/* Invite Modal */}
       {showInviteModal && (
