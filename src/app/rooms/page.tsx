@@ -115,26 +115,14 @@ export default function RoomsPage() {
         room.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()))
     )
     .sort((a, b) => {
-      // Sort user's own rooms first
       const aIsOwner = user && a.host.id === user.id;
       const bIsOwner = user && b.host.id === user.id;
       
       if (aIsOwner && !bIsOwner) return -1;
       if (!aIsOwner && bIsOwner) return 1;
       
-      // Then sort by creation date (newest first)
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     })
-
-  console.log('[DEBUG] User:', user?.id);
-  console.log('[DEBUG] Total rooms:', rooms.length);
-  console.log('[DEBUG] Filtered rooms:', filteredRooms.length);
-  console.log('[DEBUG] Room visibility:', filteredRooms.map(r => ({ 
-    name: r.name, 
-    isPrivate: r.isPrivate, 
-    hostId: r.host.id, 
-    isOwner: user && r.host.id === user.id 
-  })));
 
   const handleCreateRoom = async () => {
     try {

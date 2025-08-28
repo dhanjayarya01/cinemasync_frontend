@@ -122,20 +122,17 @@ export default function Chat({
     }
   }, [messages, voiceChatAutoPlay, user?.id, playVoiceMessage]);
 
-  // REMOVED: Automatic video volume control to prevent conflicts
-  // Voice chat now operates independently from video audio
-
-  // NEW: True real-time live voice chat (like Discord/phone call)
+  
   const startLiveVoiceChat = async () => {
     try {
       console.log("🎙️ Starting real-time live voice chat...");
       
-      // Enable audio context for autoplay (user interaction)
+      
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
       
-      // Resume audio context if suspended (required for autoplay)
+      
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume();
         console.log('🔊 Audio context resumed for live voice');
@@ -203,7 +200,6 @@ export default function Chat({
               const hasVoiceActivity = await detectVoiceActivity(audioBlob);
               
               if (hasVoiceActivity) {
-                console.log('🎙️ Streaming live audio chunk:', event.data.size, 'bytes');
                 
                 // Convert to base64 for real-time transmission
                 const reader = new FileReader();
@@ -383,15 +379,12 @@ export default function Chat({
       
       const hasVoice = rms > RMS_THRESHOLD || maxAmplitude > PEAK_THRESHOLD;
       
-      if (hasVoice) {
-        console.log(`🎤 Voice detected - RMS: ${rms.toFixed(4)}, Peak: ${maxAmplitude.toFixed(4)}`);
-      }
+
       
       return hasVoice;
       
     } catch (error) {
       console.error('❌ Voice activity detection failed:', error);
-      // If VAD fails, assume there's voice activity to avoid blocking audio
       return true;
     }
   };

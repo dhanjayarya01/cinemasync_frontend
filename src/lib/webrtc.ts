@@ -545,8 +545,7 @@ class WebRTCManager {
 
       this.isLiveVoiceModeActive = true;
 
-      // COMPLETELY AVOID WebRTC for live voice to prevent video conflicts
-      // Instead, use socket.io for voice data transmission (simpler approach)
+     
       console.log('Live voice chat started (socket-based to avoid video conflicts)');
       return this.liveVoiceStream;
     } catch (error) {

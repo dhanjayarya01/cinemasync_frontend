@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Play, Shield, Lock, CheckCircle } from "lucide-react"
+import { Play, Shield, Lock, CheckCircle, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
@@ -13,17 +13,17 @@ export default function AuthPage() {
   const [error, setError] = useState("")
   const router = useRouter()
 
-  
+
   useEffect(() => {
     const token = getToken()
-    
+
     if (token) {
-     
+
       verifyToken(token).then(isValid => {
         if (isValid) {
           router.push("/rooms")
         } else {
-          
+
           logout()
         }
       })
@@ -36,12 +36,12 @@ export default function AuthPage() {
 
     try {
       const data = await googleLogin(credentialResponse.credential)
-      
-      
+
+
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
-      
-      
+
+
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
         localStorage.removeItem('redirectAfterLogin')
@@ -95,15 +95,22 @@ export default function AuthPage() {
                 </div>
               )}
 
-                <div className="w-full flex justify-center">
-                <GoogleLogin
-                  onSuccess={handleGoogleSuccess}
-                  onError={handleGoogleError}
-                  theme="filled_blue"
-                  size="large"
-                  text="continue_with"
-                  shape="rectangular"
-                />
+              <div className="w-full flex justify-center relative">
+                {isLoading ? (
+                  <div className="flex items-center justify-center space-x-2 bg-blue-600 text-white px-6 py-3 rounded-md min-w-[200px]">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>Signing in...</span>
+                  </div>
+                ) : (
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={handleGoogleError}
+                    theme="filled_blue"
+                    size="large"
+                    text="continue_with"
+                    shape="rectangular"
+                  />
+                )}
               </div>
 
               <div className="space-y-4">
@@ -121,7 +128,7 @@ export default function AuthPage() {
                 </div>
               </div>
 
-             
+
 
               <div className="text-center text-xs text-gray-400 bg-gray-800/30 rounded-lg p-3">
                 <Lock className="w-4 h-4 inline mr-1" />
