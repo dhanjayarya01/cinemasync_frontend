@@ -1515,9 +1515,19 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // Handle click outside chat to close it
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      
+      // Check if click is on chat toggle button or its children
+      const chatToggleButton = document.querySelector('[title="Toggle chat"]');
+      const isClickOnToggleButton = chatToggleButton && (
+        chatToggleButton.contains(target) || 
+        chatToggleButton === target
+      );
+      
       if (isChatVisible && 
           chatContainerRef.current && 
-          !chatContainerRef.current.contains(event.target as Node) &&
+          !chatContainerRef.current.contains(target) &&
+          !isClickOnToggleButton &&
           !isFloatingMode) {
         setIsChatVisible(false);
       }

@@ -45,7 +45,7 @@ type Props = {
 
   unreadCount?: number;
   onMarkAsRead?: () => void;
-  
+
   // New props for enhanced functionality
   messageInputRef?: React.RefObject<HTMLInputElement>;
   chatContainerRef?: React.RefObject<HTMLDivElement>;
@@ -263,7 +263,7 @@ export default function Chat({
 
       } catch (error) {
         console.error(' Failed to create recording session:', error);
-        
+
         setTimeout(() => {
           if (isLiveVoiceModeRef.current) {
             createRecordingSession();
@@ -581,9 +581,13 @@ export default function Chat({
     setIsVisible((v) => {
       const next = !v;
       if (next) {
-        setEphemeralQueue([]); 
-        setIsFloatingMode(false); 
-        onMarkAsRead?.(); 
+        setEphemeralQueue([]);
+        setIsFloatingMode(false);
+        onMarkAsRead?.();
+        // Focus message input when opening
+        setTimeout(() => {
+          messageInputRef?.current?.focus();
+        }, 100);
       }
       return next;
     });
@@ -594,7 +598,7 @@ export default function Chat({
     setIsFloatingMode((v) => {
       const nextFloating = !v;
       if (nextFloating && isVisible) {
-        setIsVisible(false); 
+        setIsVisible(false);
       }
       return nextFloating;
     });
