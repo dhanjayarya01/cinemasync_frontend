@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Play, Pause, Volume2, VolumeX, Maximize, Monitor, Loader2, StopCircle,
-  Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2, X
+  Crown, Settings, Users, Send, Video, Youtube, AlertCircle, Mic, Trash2, X,
+  MessageCircle, Share2, Copy, ExternalLink, SkipBack, SkipForward
 } from "lucide-react";
 
 import Chat from "@/lib/chat";
@@ -39,6 +40,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
   const progressBarRef = useRef<HTMLDivElement | null>(null);
+  const messageInputRef = useRef<HTMLInputElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
   const [currentVideoType, setCurrentVideoType] = useState<"youtube" | "screen" | "file" | null>(null);
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
@@ -86,7 +89,170 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // ephemeral messages for floating mode
   const [ephemeralMessages, setEphemeralMessages] = useState<Array<{ id: string; text: string }>>([]);
 
+  // Video controls auto-hide state
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimeoutRef = useRef<number | null>(null);
+
   const isHost = user?.id === roomInfo?.host?.id;
+
+  // Video controls auto-hide functionality
+  const showControlsTemporarily = useCallback(() => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+    }
+    controlsTimeoutRef.current = window.setTimeout(() => {
+      setShowControls(false);
+    }, 3000);
+  }, []);
+
+  const handleVideoContainerInteraction = useCallback(() => {
+    showControlsTemporarily();
+  }, [showControlsTemporarily]);
+
+  // Seek functions
+  const seekVideo = useCallback((seconds: number) => {
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (!player) return;
+      try {
+        const currentTime = player.getCurrentTime();
+        const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
+        player.seekTo(newTime, true);
+        if (isHost) socketManager.seekVideo(newTime);
+      } catch (e) { }
+    } else if (videoRef.current) {
+      const newTime = Math.max(0, Math.min(duration, videoRef.current.currentTime + seconds));
+      videoRef.current.currentTime = newTime;
+      setCurrentTime(newTime);
+      if (isHost) socketManager.seekVideo(newTime);
+    }
+  }, [currentVideoType, duration, isHost]);
+
+  const seekBackward = useCallback(() => seekVideo(-30), [seekVideo]);
+  const seekForward = useCallback(() => seekVideo(30), [seekVideo]);
+
+  // Volume control functions
+  const adjustVolume = useCallback((delta: number) => {
+    const newVolume = Math.max(0, Math.min(1, volume + delta));
+    setVolume(newVolume);
+    setIsMuted(newVolume === 0);
+
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (player) {
+        try {
+          player.setVolume(newVolume * 100);
+          if (newVolume === 0) {
+            player.mute();
+          } else {
+            player.unMute();
+          }
+        } catch (e) { }
+      }
+    } else if (isHost) {
+      webrtcManager.setLocalVolume(newVolume);
+    } else if (videoRef.current) {
+      videoRef.current.volume = newVolume;
+    }
+  }, [volume, currentVideoType, isHost]);
+
+  const volumeUp = useCallback(() => adjustVolume(0.1), [adjustVolume]);
+  const volumeDown = useCallback(() => adjustVolume(-0.1), [adjustVolume]);
+
+  // Toggle mute function
+  const handleToggleMute = useCallback(() => {
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (!player) return;
+      try {
+        if (isMuted) {
+          player.unMute();
+          setIsMuted(false);
+        } else {
+          player.mute();
+          setIsMuted(true);
+        }
+      } catch (e) { }
+    } else if (isHost) {
+      const newMuted = !isMuted;
+      webrtcManager.setLocalMuted(newMuted);
+      setIsMuted(newMuted);
+    } else if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+      setIsMuted(!isMuted);
+    }
+  }, [currentVideoType, isMuted, isHost]);
+
+  // Toggle chat function
+  const handleToggleChat = useCallback(() => {
+    setIsChatVisible(prev => {
+      const newVisible = !prev;
+      if (newVisible) {
+        
+        setIsFloatingMode(false);
+        
+        setTimeout(() => {
+          messageInputRef.current?.focus();
+        }, 100);
+      }
+      return newVisible;
+    });
+  }, []);
+
+  // Toggle fullscreen function
+  const handleToggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      videoContainerRef.current?.requestFullscreen();
+    }
+  }, []);
+
+  // Play/pause function
+  const handleTogglePlayPause = useCallback(async () => {
+    if (currentVideoType === "youtube") {
+      const player = getYTPlayer();
+      if (!player) return;
+
+      try {
+        const state = player.getPlayerState ? player.getPlayerState() : null;
+        const YT = (window as any).YT;
+
+        if (state === YT.PlayerState.PLAYING) {
+          player.pauseVideo();
+          setIsPlaying(false);
+          if (isHost) socketManager.pauseVideo();
+        } else {
+          player.playVideo();
+          setIsPlaying(true);
+          if (isHost) {
+            const ct = player.getCurrentTime ? player.getCurrentTime() : 0;
+            socketManager.playVideo(ct);
+          }
+        }
+      } catch (e) { }
+      return;
+    }
+
+    if (!videoRef.current) return;
+
+    if (isPlaying) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+      if (isHost) socketManager.pauseVideo();
+    } else {
+      try {
+        await videoRef.current.play();
+        setIsPlaying(true);
+        if (isHost) socketManager.playVideo(videoRef.current.currentTime);
+      } catch (e: any) {
+        if (e?.name === "NotAllowedError") setShowResumeButton(true);
+      }
+    }
+  }, [currentVideoType, isPlaying, isHost]);
+
+
 
   // YouTube utility functions
   const extractYouTubeId = (url: string): string | null => {
@@ -439,7 +605,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     let mounted = true;
     let authInFlight = true;
 
-    // webrtcManager will be passed as prop to Chat component instead of global exposure
+
 
     const init = async () => {
       try {
@@ -514,7 +680,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
           }
           setMessages(prev => [...prev, msg]);
-          if (!isChatVisible) setUnreadCount(c => c + 1);
+          if (!isChatVisible && msg.user?.id !== user?.id) setUnreadCount(c => c + 1);
         });
 
         socketManager.onVideoControl((data) => handleVideoControl(data));
@@ -888,7 +1054,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       socketManager.sendVideoMetadata({ name: file.name, size: file.size, type: file.type, url: "p2p" });
       if (isHost && videoRef.current) {
         try {
-          webrtcManager.streamVideoFile(file, videoRef.current).catch((err) => {});
+          webrtcManager.streamVideoFile(file, videoRef.current).catch((err) => { });
         } catch (e) { }
       }
     }, 200);
@@ -1005,81 +1171,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     }
   }, [isHost]);
 
-  const togglePlayPause = async () => {
-    if (currentVideoType === "youtube") {
-      const player = getYTPlayer();
-      if (!player) {
-        return;
-      }
 
-      try {
-        const state = player.getPlayerState ? player.getPlayerState() : null;
-        const YT = (window as any).YT;
 
-        if (state === YT.PlayerState.PLAYING) {
-          player.pauseVideo();
-          setIsPlaying(false);
-          if (isHost) socketManager.pauseVideo();
-        } else {
-          player.playVideo();
-          setIsPlaying(true);
-          if (isHost) {
-            const ct = player.getCurrentTime ? player.getCurrentTime() : 0;
-            socketManager.playVideo(ct);
-          }
-        }
-      } catch (e) {
-      }
-      return;
-    }
 
-    if (!videoRef.current) return;
-
-    if (isPlaying) {
-      videoRef.current.pause();
-      setIsPlaying(false);
-      if (isHost) socketManager.pauseVideo();
-    } else {
-      try {
-        await videoRef.current.play();
-        setIsPlaying(true);
-        if (isHost) socketManager.playVideo(videoRef.current.currentTime);
-      } catch (e: any) {
-        if (e?.name === "NotAllowedError") setShowResumeButton(true);
-      }
-    }
-  };
-
-  const toggleMute = () => {
-    if (currentVideoType === "youtube") {
-      const player = getYTPlayer();
-      if (!player) return;
-
-      try {
-        if (isMuted) {
-          player.unMute();
-          setIsMuted(false);
-        } else {
-          player.mute();
-          setIsMuted(true);
-        }
-      } catch (e) {
-      }
-      return;
-    }
-
-    if (!videoRef.current) return;
-
-    if (isHost) {
-      const newMuted = !isMuted;
-      webrtcManager.setLocalMuted(newMuted);
-      setIsMuted(newMuted);
-      return;
-    }
-
-    videoRef.current.muted = !isMuted;
-    setIsMuted(!isMuted);
-  };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.target.value);
@@ -1090,7 +1184,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       const player = getYTPlayer();
       if (player) {
         try {
-          player.setVolume(v * 100); // YouTube expects 0-100
+          player.setVolume(v * 100); 
           if (v === 0) {
             player.mute();
           } else {
@@ -1174,6 +1268,62 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     setMessage("");
     socketManager.sendMessage(msgText, false);
   };
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault();
+          handleTogglePlayPause();
+          showControlsTemporarily();
+          break;
+        case 'KeyF':
+          e.preventDefault();
+          handleToggleFullscreen();
+          showControlsTemporarily();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          seekBackward();
+          showControlsTemporarily();
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          seekForward();
+          showControlsTemporarily();
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          volumeUp();
+          showControlsTemporarily();
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          volumeDown();
+          showControlsTemporarily();
+          break;
+        case 'KeyM':
+          e.preventDefault();
+          handleToggleMute();
+          showControlsTemporarily();
+          break;
+        case 'KeyI':
+          e.preventDefault();
+          handleToggleChat();
+          showControlsTemporarily();
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyPress);
+    return () => document.removeEventListener('keydown', handleKeyPress);
+  }, [handleTogglePlayPause, handleToggleFullscreen, seekBackward, seekForward, volumeUp, volumeDown, handleToggleMute, handleToggleChat, showControlsTemporarily]);
 
   useEffect(() => {
     const el = chatScrollRef.current;
@@ -1346,29 +1496,55 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           try { URL.revokeObjectURL(msg.audioUrl); } catch { }
         }
       });
+      // Cleanup controls timeout
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+      }
     };
-    
+
   }, []);
+
+  // Show controls initially and when video starts playing
+  useEffect(() => {
+    showControlsTemporarily();
+  }, [currentVideoType, showControlsTemporarily]);
+
+  // Handle click outside chat to close it
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isChatVisible && 
+          chatContainerRef.current && 
+          !chatContainerRef.current.contains(event.target as Node) &&
+          !isFloatingMode) {
+        setIsChatVisible(false);
+      }
+    };
+
+    if (isChatVisible && !isFloatingMode) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [isChatVisible, isFloatingMode]);
 
   useEffect(() => {
     if (!isHost && user && roomInfo && currentVideoType !== "youtube") {
-      
+
       const timer = setTimeout(() => {
         setShowResumeButton(true);
-      }, 2000); 
+      }, 2000);
 
       return () => clearTimeout(timer);
     }
   }, [isHost, user, roomInfo, currentVideoType]);
 
- 
+
   useEffect(() => {
     if (isPlaying) {
       setShowResumeButton(false);
     }
   }, [isPlaying]);
 
-  
+
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
@@ -1423,7 +1599,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     };
   }, []);
 
-  
+
   useEffect(() => {
     if (currentVideoType !== "youtube") {
       const existingPlayer = getYTPlayer();
@@ -1504,35 +1680,53 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   );
 
   return (
-    <div className="min-h-screen bg-black">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900/20">
       <div className="fixed top-4 left-4 z-50">
-        {showConnectedText ? <div className="px-2 py-1 rounded bg-green-500 text-white text-xs">Connected</div> :
-          <div className={`w-3 h-3 rounded-full ${webrtcStatus?.connectedPeers > 0 ? "bg-green-500" : "bg-red-500"}`} />}
+        {showConnectedText ?
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-medium shadow-lg animate-pulse">
+            ✓ Connected
+          </div> :
+          <div className={`w-3 h-3 rounded-full shadow-lg transition-all duration-300 ${webrtcStatus?.connectedPeers > 0 ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
+        }
       </div>
 
-      <header className="bg-gray-900 border-b border-gray-800 px-4 py-3">
+      <header className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-4 py-3 backdrop-blur-sm">
         <div className="flex items-center justify-between">
-          <Link href="/rooms" className="flex items-center space-x-2">
-            <Play className="h-6 w-6 text-purple-400" />
-            <span className="text-lg font-bold text-white">CinemaSync</span>
+          <Link href="/rooms" className="flex items-center space-x-2 group transition-all duration-300 hover:scale-105">
+            <Play className="h-6 w-6 text-purple-400 group-hover:text-purple-300 transition-colors duration-300" />
+            <span className="text-lg font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">CinemaSync</span>
           </Link>
           <div className="flex items-center space-x-4">
-            <span className="px-2 py-1 bg-green-600/20 text-green-300 text-sm rounded-full flex items-center"><Users className="mr-1 h-3 w-3" />{participants.length}/5</span>
-            {isHost && <span className="px-2 py-1 bg-purple-600/20 text-purple-300 text-sm rounded-full flex items-center"><Crown className="mr-1 h-3 w-3" />Host</span>}
+            <span className="px-3 py-1.5 bg-gradient-to-r from-green-600/20 to-emerald-600/20 text-green-300 text-sm rounded-full flex items-center border border-green-500/20 backdrop-blur-sm">
+              <Users className="mr-1 h-3 w-3" />{participants.length}/5
+            </span>
+            {isHost && (
+              <span className="px-3 py-1.5 bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-purple-300 text-sm rounded-full flex items-center border border-purple-500/20 backdrop-blur-sm animate-pulse">
+                <Crown className="mr-1 h-3 w-3" />Host
+              </span>
+            )}
             <Button
               variant="outline"
               size="sm"
               onClick={generateInviteLink}
-              className="text-white border-gray-600 hover:bg-gray-800 bg-transparent"
+              className="text-white border-purple-500/30 hover:bg-purple-600/20 bg-transparent backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:border-purple-400"
             >
               <Users className="mr-2 h-4 w-4" />Invite
             </Button>
+            {user && (
+              <Avatar className="h-8 w-8 border-2 border-purple-400 hover:border-purple-300 transition-all duration-300 hover:scale-110 shadow-lg">
+                <AvatarImage src={user.picture || "/placeholder.svg"} />
+                <AvatarFallback className="text-xs bg-gradient-to-br from-purple-600 to-purple-700 text-white">
+                  {user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                </AvatarFallback>
+              </Avatar>
+            )}
           </div>
         </div>
       </header>
 
       {isHost && (
-        <div className="bg-gray-900 border-b border-gray-800 px-4 py-3">
+        <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-4 py-3 backdrop-blur-sm">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-1 flex gap-2">
               <div className="relative flex-1">
@@ -1540,37 +1734,52 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   placeholder="Paste YouTube URL here (auto-plays when pasted)..."
                   value={youtubeUrl}
                   onChange={(e) => handleYouTubeUrlChange(e.target.value)}
-                  className={`bg-gray-800 border-gray-700 text-white placeholder:text-gray-400 pr-10 ${youtubeError ? 'border-red-500' : youtubeVideoId ? 'border-green-500' : ''
+                  className={`bg-gray-800/50 border-gray-600 text-white placeholder:text-gray-400 pr-10 backdrop-blur-sm transition-all duration-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 ${youtubeError ? 'border-red-500 focus:border-red-400' :
+                      youtubeVideoId ? 'border-green-500 focus:border-green-400' : ''
                     }`}
                   disabled={isLoadingVideo}
                 />
                 {isLoadingVideo && (
                   <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                    <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
                   </div>
                 )}
                 {youtubeError && (
-                  <div className="absolute top-full left-0 mt-1 text-xs text-red-400 bg-red-900/20 px-2 py-1 rounded z-10">
+                  <div className="absolute top-full left-0 mt-1 text-xs text-red-400 bg-red-900/30 px-3 py-1.5 rounded-lg z-10 border border-red-500/20 backdrop-blur-sm animate-pulse">
                     {youtubeError}
                   </div>
                 )}
                 {youtubeVideoId && !youtubeError && (
-                  <div className="absolute top-full left-0 mt-1 text-xs text-green-400 bg-green-900/20 px-2 py-1 rounded z-10">
+                  <div className="absolute top-full left-0 mt-1 text-xs text-green-400 bg-green-900/30 px-3 py-1.5 rounded-lg z-10 border border-green-500/20 backdrop-blur-sm animate-pulse">
                     ✓ Valid YouTube URL - Video loaded
                   </div>
                 )}
               </div>
-              <div className={`flex items-center px-3 rounded-md ${youtubeVideoId && !youtubeError ? 'bg-green-600/20' : 'bg-red-600/20'
+              <div className={`flex items-center px-3 rounded-lg border backdrop-blur-sm transition-all duration-300 ${youtubeVideoId && !youtubeError
+                  ? 'bg-green-600/20 border-green-500/30 animate-pulse'
+                  : 'bg-red-600/20 border-red-500/30'
                 }`}>
-                <Youtube className={`h-4 w-4 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
+                <Youtube className={`h-4 w-4 transition-colors duration-300 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
                   }`} />
               </div>
             </div>
             <div className="flex gap-2">
               {!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && (
-                <Button onClick={handleShareScreen} disabled={isLoadingVideo} className="bg-blue-600 hover:bg-blue-700 transition-all duration-300"><Monitor className="mr-2 h-4 w-4" />Share Screen</Button>
+                <Button
+                  onClick={handleShareScreen}
+                  disabled={isLoadingVideo}
+                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
+                >
+                  <Monitor className="mr-2 h-4 w-4" />Share Screen
+                </Button>
               )}
-              <Button onClick={handleSelectVideo} disabled={isLoadingVideo} className="bg-green-600 hover:bg-green-700 transition-all duration-300"><Video className="mr-2 h-4 w-4" />Select Video</Button>
+              <Button
+                onClick={handleSelectVideo}
+                disabled={isLoadingVideo}
+                className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25"
+              >
+                <Video className="mr-2 h-4 w-4" />Select Video
+              </Button>
             </div>
           </div>
         </div>
@@ -1579,221 +1788,346 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFileSelect} className="hidden" />
 
       <div className="flex flex-col md:flex-row md:h-[calc(100vh-160px)]">
-        <div ref={videoContainerRef} className="md:flex-1 bg-black flex flex-col relative">
-          <div className="flex-1 relative bg-gray-900 flex items-center justify-center" style={{ minHeight: 240 }}>
-            <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
-              {currentVideoType === "youtube" && youtubeVideoId ? (
-                <div key={youtubeContainerKey} className="w-full h-full" suppressHydrationWarning={true}>
-                  <div
-                    ref={ytContainerRef}
-                    className="w-full h-full"
-                    suppressHydrationWarning={true}
-                  />
-                </div>
-              ) : (
-                <video ref={bindVideo as any} className="w-full h-full object-contain bg-black" autoPlay playsInline />
-              )}
+        <div
+          ref={videoContainerRef}
+          className="md:flex-1 bg-black relative h-[50vh] md:h-auto cursor-pointer overflow-hidden"
+          onMouseMove={handleVideoContainerInteraction}
+          onTouchStart={handleVideoContainerInteraction}
+          onClick={handleVideoContainerInteraction}
+        >
+          <div className="absolute inset-0 bg-black flex items-center justify-center">
+            {currentVideoType === "youtube" && youtubeVideoId ? (
+              <div key={youtubeContainerKey} className="w-full h-full" suppressHydrationWarning={true}>
+                <div
+                  ref={ytContainerRef}
+                  className="w-full h-full"
+                  suppressHydrationWarning={true}
+                />
+              </div>
+            ) : (
+              <video ref={bindVideo as any} className="w-full h-full object-contain bg-black" autoPlay playsInline />
+            )}
+          </div>
+
+          {/* Video Controls with Auto-hide */}
+          <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-4 transition-all duration-300 ${showControls ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'}`}>
+            <div ref={progressBarRef} className="w-full h-3 bg-gray-700/80 rounded-full mb-4 cursor-pointer overflow-hidden" onClick={handleProgressBarClick}>
+              <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-300 shadow-lg shadow-purple-500/30" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
             </div>
 
-            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
-              <div ref={progressBarRef} className="w-full h-2 bg-gray-700 rounded-full mb-4 cursor-pointer" onClick={handleProgressBarClick}>
-                <div className="h-full bg-purple-600 rounded-full" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
-              </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <Button variant="ghost" size="sm" onClick={handleTogglePlayPause} className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2" title="Play/Pause (Space)">
+                  {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
+                </Button>
 
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-4">
-                  <Button variant="ghost" size="sm" onClick={togglePlayPause} className="text-white hover:bg-white/20">
-                    {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-                  </Button>
-                  <div className="flex items-center space-x-2">
-                    <Button variant="ghost" size="sm" onClick={toggleMute} className="text-white hover:bg-white/20">
-                      {isMuted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-                    </Button>
-                    <input type="range" min="0" max="1" step="0.01" value={volume} onChange={handleVolumeChange} className="w-20 h-1 bg-gray-600 rounded-lg appearance-none cursor-pointer" />
-                  </div>
-                  <div className="text-white text-sm">{formatTime(currentTime)} / {formatTime(duration)}</div>
-                </div>
+                {/* Seek Backward Button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={seekBackward}
+                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
+                  title="Seek backward 30s (←)"
+                >
+                  <SkipBack className="h-4 w-4" />
+                </Button>
+
+                {/* Seek Forward Button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={seekForward}
+                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
+                  title="Seek forward 30s (→)"
+                >
+                  <SkipForward className="h-4 w-4" />
+                </Button>
 
                 <div className="flex items-center space-x-2">
-                  <Button variant="ghost" size="sm" onClick={() => { if (document.fullscreenElement) document.exitFullscreen(); else videoContainerRef.current?.requestFullscreen(); }} className="text-white hover:bg-white/20"><Maximize className="h-5 w-5" /></Button>
+                  <Button variant="ghost" size="sm" onClick={handleToggleMute} className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2" title="Mute/Unmute (M)">
+                    {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                  </Button>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={volume}
+                    onChange={handleVolumeChange}
+                    className="w-20 h-2 bg-gray-600/80 rounded-lg appearance-none cursor-pointer"
+                    title="Volume (↑↓)"
+                    style={{
+                      background: `linear-gradient(to right, rgb(168 85 247) 0%, rgb(168 85 247) ${volume * 100}%, rgb(75 85 99 / 0.8) ${volume * 100}%, rgb(75 85 99 / 0.8) 100%)`
+                    }}
+                  />
+                </div>
+                <div className="text-white text-sm font-medium bg-black/50 px-3 py-1 rounded-lg">
+                  {formatTime(currentTime)} / {formatTime(duration)}
+                </div>
+              </div>
 
-                  <button className="md:hidden inline-flex items-center justify-center p-2 rounded bg-gray-700 hover:bg-gray-600 text-white" onClick={() => {
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleToggleFullscreen}
+                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
+                  title="Fullscreen (F)"
+                >
+                  <Maximize className="h-5 w-5" />
+                </Button>
+
+                <button
+                  className="md:hidden inline-flex items-center justify-center p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all duration-300 hover:scale-110"
+                  onClick={() => {
                     if (!document.fullscreenElement) {
                       videoContainerRef.current?.requestFullscreen().catch(() => { });
                     }
                     try { (screen as any).orientation?.lock?.("landscape"); } catch { }
-                  }} title="Mobile landscape">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                      <rect x="6" y="3" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="1.2" />
-                      <path d="M9 7 L15 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </div>
+                  }}
+                  title="Mobile landscape"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                    <rect x="6" y="3" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="1.2" />
+                    <path d="M9 7 L15 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
               </div>
             </div>
-
-            {currentVideoType === "screen" && isHost && (
-              <div className="absolute top-4 right-34">
-                <Button onClick={handleStopScreenShare} variant="destructive" size="sm" className="bg-red-600 hover:bg-red-700"><StopCircle className="mr-2 h-4 w-4" />Stop Sharing</Button>
-              </div>
-            )}
-
-            {/* Simple Resume Button - shows after refresh for non-host users (non-YouTube only) */}
-            {showResumeButton && !isHost && currentVideoType !== "youtube" && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10">
-                <div className="bg-gray-800 rounded-lg p-4 text-center">
-                  <p className="text-white mb-3">Resume Playing</p>
-                  <Button
-                    onClick={() => {
-                      setShowResumeButton(false);
-
-                      togglePlayPause();
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700"
-                  >
-                    <Play className="mr-2 h-4 w-4" /> Resume
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {/* Chat overlay component */}
-
-            <Chat
-              user={user}
-              participants={participants}
-              messages={messages}
-              isVisible={isChatVisible}
-              setIsVisible={setIsChatVisible}
-              isFloatingMode={isFloatingMode}
-              setIsFloatingMode={setIsFloatingMode}
-              message={message}
-              setMessage={setMessage}
-              sendMessage={sendMessage}
-              isRecording={isRecording}
-              startRecording={startRecording}
-              stopRecording={stopRecording}
-              audioBlob={audioBlob}
-              setAudioBlob={setAudioBlob}
-              recordingTime={recordingTime}
-              handleSendVoiceMessage={handleSendVoiceMessage}
-              isSendingVoiceMessage={isSendingVoiceMessage}
-              playVoiceMessage={playVoiceMessage}
-              pauseVoiceMessage={pauseVoiceMessage}
-              playingVoiceMessages={playingVoiceMessages}
-              onVideoVolumeChange={(vol) => {
-                setVolume(vol);
-                if (videoRef.current) {
-                  videoRef.current.volume = vol;
-                }
-                if (isHost) {
-                  webrtcManager.setLocalVolume(vol);
-                }
-              }}
-              currentVideoVolume={volume}
-              socketManager={socketManager}
-              webrtcManager={webrtcManager}
-            />
-
           </div>
-        </div>
 
-
-      </div>
-
-
-
-      {/* Invite Modal */}
-      {showInviteModal && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-white">Invite Friends</h3>
+          {currentVideoType === "screen" && isHost && (
+            <div className="absolute top-4 right-4">
               <Button
-                variant="ghost"
+                onClick={handleStopScreenShare}
+                variant="destructive"
                 size="sm"
-                onClick={() => setShowInviteModal(false)}
-                className="text-gray-400 hover:text-white"
+                className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-red-500/25 animate-pulse"
               >
-                <X className="w-4 h-4" />
+                <StopCircle className="mr-2 h-4 w-4" />Stop Sharing
               </Button>
             </div>
+          )}
 
-            {/* Room Code Section */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Room Code</label>
-              <div className="flex items-center space-x-2">
-                <Input
-                  value={inviteRoomCode}
-                  readOnly
-                  className="bg-gray-700 border-gray-600 text-white flex-1"
-                />
+          {/* Simple Resume Button - shows after refresh for non-host users (non-YouTube only) */}
+          {showResumeButton && !isHost && currentVideoType !== "youtube" && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-10">
+              <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-6 text-center border border-purple-500/20 shadow-2xl">
+                <p className="text-white mb-4 text-lg">Resume Playing</p>
                 <Button
-                  onClick={() => copyToClipboard(inviteRoomCode)}
-                  variant="outline"
-                  size="sm"
-                  className="text-white border-gray-600 hover:bg-gray-700"
+                  onClick={() => {
+                    setShowResumeButton(false);
+                    handleTogglePlayPause();
+                  }}
+                  className="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-500 hover:to-purple-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-purple-500/25"
                 >
-                  Copy
+                  <Play className="mr-2 h-4 w-4" /> Resume
                 </Button>
               </div>
             </div>
+          )}
 
-            {/* Full Link Section */}
-            <div className="mb-6">
-              <label className="block text-sm font-medium text-gray-300 mb-2">Invite Link</label>
-              <div className="flex items-center space-x-2">
-                <Input
-                  value={inviteLink}
-                  readOnly
-                  className="bg-gray-700 border-gray-600 text-white flex-1 text-sm"
-                />
-                <Button
-                  onClick={() => copyToClipboard(inviteLink)}
-                  variant="outline"
-                  size="sm"
-                  className="text-white border-gray-600 hover:bg-gray-700"
-                >
-                  Copy
-                </Button>
-              </div>
+          {/* Chat overlay component */}
+
+          <Chat
+            user={user}
+            participants={participants}
+            messages={messages}
+            isVisible={isChatVisible}
+            setIsVisible={setIsChatVisible}
+            isFloatingMode={isFloatingMode}
+            setIsFloatingMode={setIsFloatingMode}
+            message={message}
+            setMessage={setMessage}
+            sendMessage={sendMessage}
+            isRecording={isRecording}
+            startRecording={startRecording}
+            stopRecording={stopRecording}
+            audioBlob={audioBlob}
+            setAudioBlob={setAudioBlob}
+            recordingTime={recordingTime}
+            handleSendVoiceMessage={handleSendVoiceMessage}
+            isSendingVoiceMessage={isSendingVoiceMessage}
+            playVoiceMessage={playVoiceMessage}
+            pauseVoiceMessage={pauseVoiceMessage}
+            playingVoiceMessages={playingVoiceMessages}
+            onVideoVolumeChange={(vol) => {
+              setVolume(vol);
+              if (videoRef.current) {
+                videoRef.current.volume = vol;
+              }
+              if (isHost) {
+                webrtcManager.setLocalVolume(vol);
+              }
+            }}
+            currentVideoVolume={volume}
+            socketManager={socketManager}
+            webrtcManager={webrtcManager}
+            unreadCount={unreadCount}
+            onMarkAsRead={() => setUnreadCount(0)}
+            messageInputRef={messageInputRef}
+            chatContainerRef={chatContainerRef}
+          />
+
+        </div>
+      </div>
+
+    
+
+  
+  {
+    showInviteModal && (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-300">
+        <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-6 w-full max-w-md mx-4 border border-purple-500/20 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">Invite Friends</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowInviteModal(false)}
+              className="text-gray-400 hover:text-white hover:bg-purple-600/20 transition-all duration-300 rounded-full"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+
+          {/* Room Code Section */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-purple-200 mb-2 flex items-center space-x-2">
+              <Users className="h-4 w-4 text-purple-400" />
+              <span>Room Code</span>
+            </label>
+            <div className="flex items-center space-x-2">
+              <Input
+                value={inviteRoomCode}
+                readOnly
+                className="bg-gradient-to-r from-gray-700/50 to-gray-800/50 border-purple-500/30 text-white text-center text-lg font-mono tracking-wider flex-1 backdrop-blur-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
+              />
+              <Button
+                onClick={() => copyToClipboard(inviteRoomCode)}
+                variant="outline"
+                size="sm"
+                className="group text-white border-purple-500/30 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-300 hover:scale-105 shadow-lg hover:shadow-purple-500/25"
+              >
+                <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
+                Copy
+              </Button>
+            </div>
+          </div>
+
+          {/* Full Link Section */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center space-x-2">
+              <ExternalLink className="h-4 w-4 text-purple-400" />
+              <span>Invite Link</span>
+            </label>
+            <div className="flex items-center space-x-2">
+              <Input
+                value={inviteLink}
+                readOnly
+                className="bg-gradient-to-r from-gray-700 to-gray-800 border-purple-500/30 text-white flex-1 text-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
+              />
+              <Button
+                onClick={() => copyToClipboard(inviteLink)}
+                variant="outline"
+                size="sm"
+                className="group text-white border-purple-500/30 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-300 hover:scale-105 shadow-lg hover:shadow-purple-500/25"
+              >
+                <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
+                Copy
+              </Button>
+            </div>
+          </div>
+
+          {/* Social Share Buttons */}
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2 mb-4">
+              <Share2 className="h-4 w-4 text-purple-400" />
+              <p className="text-sm font-medium text-gray-300">Share on social media</p>
             </div>
 
-            {/* Social Share Buttons */}
-            <div className="space-y-3">
-              <p className="text-sm text-gray-300 mb-3">Share on social media:</p>
-
+            <div className="grid grid-cols-2 gap-3">
               <Button
                 onClick={shareOnWhatsApp}
-                className="w-full bg-green-600 hover:bg-green-700 text-white"
+                className="group relative overflow-hidden bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25"
               >
-                Share on WhatsApp
+                <div className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-green-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="relative flex items-center justify-center space-x-2">
+                  <MessageCircle className="h-4 w-4" />
+                  <span className="font-medium">WhatsApp</span>
+                </div>
               </Button>
 
               <Button
                 onClick={shareOnTelegram}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                className="group relative overflow-hidden bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
               >
-                Share on Telegram
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="relative flex items-center justify-center space-x-2">
+                  <Send className="h-4 w-4" />
+                  <span className="font-medium">Telegram</span>
+                </div>
               </Button>
 
               <Button
                 onClick={shareOnDiscord}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white"
+                className="group relative overflow-hidden bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25"
               >
-                Copy for Discord
+                <div className="absolute inset-0 bg-gradient-to-r from-indigo-400/20 to-purple-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="relative flex items-center justify-center space-x-2">
+                  <Copy className="h-4 w-4" />
+                  <span className="font-medium">Discord</span>
+                </div>
               </Button>
 
               <Button
                 onClick={shareOnTwitter}
-                className="w-full bg-sky-600 hover:bg-sky-700 text-white"
+                className="group relative overflow-hidden bg-gradient-to-r from-sky-600 to-cyan-700 hover:from-sky-500 hover:to-cyan-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-sky-500/25"
               >
-                Share on Twitter
+                <div className="absolute inset-0 bg-gradient-to-r from-sky-400/20 to-cyan-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="relative flex items-center justify-center space-x-2">
+                  <ExternalLink className="h-4 w-4" />
+                  <span className="font-medium">Twitter</span>
+                </div>
               </Button>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="pt-3 border-t border-gray-600/30">
+              <div className="flex space-x-2">
+                <Button
+                  onClick={() => copyToClipboard(`Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`)}
+                  variant="outline"
+                  className="flex-1 text-gray-300 border-gray-600/50 hover:bg-gray-700/50 hover:border-purple-500/50 transition-all duration-300 hover:scale-105"
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  Copy All
+                </Button>
+                <Button
+                  onClick={() => {
+                    if (navigator.share) {
+                      navigator.share({
+                        title: 'Join my CinemaSync room!',
+                        text: `Join me for a movie night! Room code: ${inviteRoomCode}`,
+                        url: inviteLink
+                      }).catch(() => { });
+                    } else {
+                      copyToClipboard(`Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`);
+                    }
+                  }}
+                  variant="outline"
+                  className="flex-1 text-gray-300 border-gray-600/50 hover:bg-gray-700/50 hover:border-purple-500/50 transition-all duration-300 hover:scale-105"
+                >
+                  <Share2 className="mr-2 h-4 w-4" />
+                  Share
+                </Button>
+              </div>
             </div>
           </div>
         </div>
-      )}
-    </div>
+      </div>
+    )
+  }
+    </div >
   );
 }
