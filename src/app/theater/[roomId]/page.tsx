@@ -73,7 +73,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [inviteLink, setInviteLink] = useState('');
   const [inviteRoomCode, setInviteRoomCode] = useState('');
 
-  // Voice message states
+ 
+  const [copiedStates, setCopiedStates] = useState<{[key: string]: boolean}>({});
+
+  
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -2007,7 +2010,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 onClick={() => copyToClipboard(inviteRoomCode)}
                 variant="outline"
                 size="sm"
-                className="group text-white border-purple-500/30 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-300 hover:scale-105 shadow-lg hover:shadow-purple-500/25"
+                className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
               >
                 <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
                 Copy
@@ -2031,7 +2034,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 onClick={() => copyToClipboard(inviteLink)}
                 variant="outline"
                 size="sm"
-                className="group text-white border-purple-500/30 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-300 hover:scale-105 shadow-lg hover:shadow-purple-500/25"
+                className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
               >
                 <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
                 Copy
@@ -2092,37 +2095,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               </Button>
             </div>
 
-            {/* Quick Actions */}
-            <div className="pt-3 border-t border-gray-600/30">
-              <div className="flex space-x-2">
-                <Button
-                  onClick={() => copyToClipboard(`Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`)}
-                  variant="outline"
-                  className="flex-1 text-gray-300 border-gray-600/50 hover:bg-gray-700/50 hover:border-purple-500/50 transition-all duration-300 hover:scale-105"
-                >
-                  <Copy className="mr-2 h-4 w-4" />
-                  Copy All
-                </Button>
-                <Button
-                  onClick={() => {
-                    if (navigator.share) {
-                      navigator.share({
-                        title: 'Join my CinemaSync room!',
-                        text: `Join me for a movie night! Room code: ${inviteRoomCode}`,
-                        url: inviteLink
-                      }).catch(() => { });
-                    } else {
-                      copyToClipboard(`Join me for a movie night! Room code: ${inviteRoomCode}\n${inviteLink}`);
-                    }
-                  }}
-                  variant="outline"
-                  className="flex-1 text-gray-300 border-gray-600/50 hover:bg-gray-700/50 hover:border-purple-500/50 transition-all duration-300 hover:scale-105"
-                >
-                  <Share2 className="mr-2 h-4 w-4" />
-                  Share
-                </Button>
-              </div>
-            </div>
+
           </div>
         </div>
       </div>
