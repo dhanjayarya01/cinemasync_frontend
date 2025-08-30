@@ -14,6 +14,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  // store where we captured the prompt (to ensure event fired on "/")
   const [deferredPromptCapturedAt, setDeferredPromptCapturedAt] = useState<string | null>(null);
 
   const [isInstalled, setIsInstalled] = useState(false);
@@ -22,7 +23,6 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
 
   // final guard for rendering the UI
   const [canShowInstall, setCanShowInstall] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
 
   // helpers
   const readDismissed = () =>
@@ -48,7 +48,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
 
     (window as any).printPWADebug = () => {
       console.info("[PWA DEBUG] state:", {
-        pathname,
+        pathname: window.location.pathname,
         deferredPromptExists: !!deferredPrompt,
         deferredPromptCapturedAt,
         installed: readInstalledMedia(),
@@ -75,19 +75,19 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     };
 
     const handleBeforeInstallPrompt = (e: Event) => {
-      // Use pathname from hook instead of window.location
+      const currentPath = window.location.pathname;
       const dismissed = localStorage.getItem("pwa-install-dismissed") === "true";
       const installedNow =
         window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
 
       console.info("[PWA] beforeinstallprompt event fired", {
-        currentPath: pathname,
+        currentPath,
         dismissed,
         installedNow,
       });
 
       // STRICT: only capture the event if fired while user is on the landing page
-      if (pathname !== "/" || dismissed || installedNow) {
+      if (currentPath !== "/" || dismissed || installedNow) {
         console.info("[PWA] beforeinstallprompt ignored (not on landing / dismissed / installed)");
         // do not preventDefault so browser may use its own flow
         return;
@@ -96,15 +96,14 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       // Prevent default prompt and stash it
       e.preventDefault();
       setDeferredPrompt(e);
-      setDeferredPromptCapturedAt(pathname);
-      console.info("[PWA] deferredPrompt captured at", pathname);
+      setDeferredPromptCapturedAt(currentPath);
+      console.info("[PWA] deferredPrompt captured at", currentPath);
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
       setDeferredPromptCapturedAt(null);
-      setCanShowInstall(false); // Add this line
       try {
         localStorage.setItem("pwa-install-dismissed", "true");
       } catch (err) {
@@ -155,7 +154,8 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("appinstalled", handleAppInstalled);
       console.info("[PWA] removed listeners");
     };
-  }, [pathname]); // Add pathname as dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Strict evaluation: re-evaluate all conditions whenever pathname, deferredPrompt, or install changes
   useEffect(() => {
@@ -164,13 +164,14 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const currentPath = window.location.pathname;
     const dismissed = readDismissed();
     const sessionShown = readSessionShown();
     const installedNow = readInstalledMedia();
 
     // strict rules (must all be true to show)
     const allowed =
-      pathname === "/" && // must be landing page (using hook pathname)
+      currentPath === "/" && // must be landing page
       deferredPrompt !== null && // we have captured event
       deferredPromptCapturedAt === "/" && // it was captured while on '/'
       !installedNow && // not installed
@@ -178,7 +179,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       !sessionShown; // not shown in this session/tab
 
     console.debug("[PWA] strict evaluation", {
-      pathname,
+      currentPath,
       deferredPromptExists: !!deferredPrompt,
       deferredPromptCapturedAt,
       installedNow,
@@ -190,19 +191,31 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     setCanShowInstall(Boolean(allowed));
   }, [pathname, deferredPrompt, deferredPromptCapturedAt, isInstalled]);
 
-  // IMMEDIATELY hide prompt when leaving landing page
+  // If user navigates away from landing page, clear any captured prompt to prevent leakage
   useEffect(() => {
     if (pathname !== "/") {
-      console.info("[PWA] not on landing page, ensuring prompt is hidden");
-      setCanShowInstall(false);
-      // Clear the prompt to prevent it from showing again if user returns
       if (deferredPrompt) {
-        console.info("[PWA] clearing deferredPrompt due to navigation away from landing");
-        setDeferredPrompt(null);
-        setDeferredPromptCapturedAt(null);
+        console.info("[PWA] leaving '/', clearing deferredPrompt to prevent leakage");
       }
+      setDeferredPrompt(null);
+      setDeferredPromptCapturedAt(null);
+      setCanShowInstall(false);
+    } else {
+      console.debug("[PWA] on landing page '/'");
     }
   }, [pathname, deferredPrompt]);
+
+  // when the UI is actually visible, mark sessionStorage so it won't re-show in same tab
+  useEffect(() => {
+    if (canShowInstall) {
+      try {
+        sessionStorage.setItem("pwa-install-shown", "true");
+        console.info("[PWA] prompt showing -> sessionStorage.pwa-install-shown = true");
+      } catch (err) {
+        console.warn("[PWA] could not write sessionStorage", err);
+      }
+    }
+  }, [canShowInstall]);
 
   // install handler
   const handleInstallPWA = async () => {
@@ -262,67 +275,28 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     <>
       {children}
 
-      {/* Install UI: Small button or expanded card */}
-      {canShowInstall && pathname === "/" && (
-        <div className="fixed bottom-4 right-4 z-50">
-          {!isMinimized ? (
-            // Full install card (when expanded)
-            <div className="animate-in slide-in-from-bottom-4 duration-300">
-              <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg max-w-sm">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Download className="h-5 w-5 text-purple-600" />
-                    Install CinemaSync
-                  </CardTitle>
-                  <CardDescription>
-                    Install our app for a better experience with offline support and quick access.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="flex gap-2">
-                  <Button 
-                    onClick={handleInstallPWA} 
-                    className="flex-1 bg-purple-600 hover:bg-purple-700"
-                    size="sm"
-                  >
-                    Install  this App
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    onClick={() => setIsMinimized(true)} 
-                    className="px-3"
-                    size="sm"
-                    title="Minimize"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </CardContent>
-              </Card>
-            </div>
-          ) : (
-            // Small install button (default state)
-            <div className="animate-in fade-in duration-200">
-              <div className="flex flex-col gap-1">
-                {/* Main install button */}
-                <Button
-                  onClick={handleExpandInstall}
-                  className="bg-purple-600 hover:bg-purple-700 text-black shadow-lg text-xs px-3 py-2 h-auto min-w-0"
-                  title="Install CinemaSync App"
-                >
-                  Install
-                </Button>
-                {/* Tiny dismiss button below */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleDismissInstall}
-                  className="w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-100 self-center"
-                  title="Dismiss forever"
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            </div>
-          )}
+      {/* Strict Install UI: only visible when canShowInstall === true */}
+      {canShowInstall && (
+        <div className="fixed bottom-4 left-4 right-4 z-50">
+          <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Download className="h-5 w-5 text-purple-600" />
+                Install CinemaSync
+              </CardTitle>
+              <CardDescription>
+                Install our app for a better experience with offline support and quick access.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex gap-2">
+              <Button onClick={handleInstallPWA} className="flex-1 bg-purple-600 hover:bg-purple-700">
+                Install this app App
+              </Button>
+              <Button variant="outline" onClick={handleDismissInstall} className="px-4">
+                <X className="h-4 w-4" />
+              </Button>
+            </CardContent>
+          </Card>
         </div>
       )}
 
