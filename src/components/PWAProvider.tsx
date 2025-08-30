@@ -126,7 +126,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                 }
               });
             }
-          }
+          });
           console.debug("[PWA] service worker registered", registration);
         } catch (err) {
           console.error("[PWA] service worker register failed", err);
