@@ -22,6 +22,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
 
   // final guard for rendering the UI
   const [canShowInstall, setCanShowInstall] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   // helpers
   const readDismissed = () =>
@@ -261,28 +262,66 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     <>
       {children}
 
-      {/* Strict Install UI: only visible when canShowInstall === true AND on landing page */}
+      {/* Install UI: Full card or minimized cross */}
       {canShowInstall && pathname === "/" && (
-        <div className="fixed bottom-4 left-4 right-4 z-50">
-          <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <Download className="h-5 w-5 text-purple-600" />
-                Install CinemaSync
-              </CardTitle>
-              <CardDescription>
-                Install our app for a better experience with offline support and quick access.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex gap-2">
-              <Button onClick={handleInstallPWA} className="flex-1 bg-purple-600 hover:bg-purple-700">
-                Install App
+        <div className="fixed bottom-4 right-4 z-50">
+          {!isMinimized ? (
+            // Full install card
+            <div className="animate-in slide-in-from-bottom-4 duration-300">
+              <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg max-w-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Download className="h-5 w-5 text-purple-600" />
+                    Install CinemaSync
+                  </CardTitle>
+                  <CardDescription>
+                    Install our app for a better experience with offline support and quick access.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex gap-2">
+                  <Button 
+                    onClick={handleInstallPWA} 
+                    className="flex-1 bg-purple-600 hover:bg-purple-700"
+                    size="sm"
+                  >
+                    Install App
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    onClick={handleDismissInstall} 
+                    className="px-3"
+                    size="sm"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            // Minimized cross icon
+            <div className="animate-in fade-in duration-200">
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleExpandInstall}
+                className="w-10 h-10 rounded-full bg-purple-600 text-white border-purple-600 hover:bg-purple-700 hover:border-purple-700 shadow-lg relative"
+                title="Install CinemaSync App"
+              >
+                <Download className="h-4 w-4" />
+                {/* Small dismiss X in corner */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDismissInstall();
+                  }}
+                  className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center text-white text-xs"
+                  title="Dismiss"
+                >
+                  <X className="h-2 w-2" />
+                </button>
               </Button>
-              <Button variant="outline" onClick={handleDismissInstall} className="px-4">
-                <X className="h-4 w-4" />
-              </Button>
-            </CardContent>
-          </Card>
+            </div>
+          )}
         </div>
       )}
 
