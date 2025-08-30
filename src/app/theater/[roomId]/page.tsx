@@ -2163,7 +2163,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         />
       </div>
 
-      {/* Time */}
+    
       <div className="hidden md:block text-white text-sm font-medium bg-black/50 px-2 md:px-3 py-1 rounded-lg">
         {formatTime(currentTime)} / {formatTime(duration)}
       </div>
