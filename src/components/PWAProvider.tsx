@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { RefreshCw, Download, X } from 'lucide-react'
@@ -14,6 +15,10 @@ export function PWAProvider({ children }: PWAProviderProps) {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [isOnline, setIsOnline] = useState(true)
+  const pathname = usePathname()
+  
+  // Only show install prompt on landing page (home page)
+  const shouldShowInstallPrompt = pathname === '/' && deferredPrompt && !isInstalled
 
   useEffect(() => {
     // Check if PWA is already installed
@@ -111,8 +116,8 @@ export function PWAProvider({ children }: PWAProviderProps) {
     <>
       {children}
       
-      {/* Install PWA Prompt */}
-      {deferredPrompt && !isInstalled && (
+      {/* Install PWA Prompt - Only on landing page */}
+      {shouldShowInstallPrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
             <CardHeader className="pb-3">
