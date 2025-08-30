@@ -57,7 +57,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  // Chat overlaying state now here
+  
   const [isChatVisible, setIsChatVisible] = useState(false);
   const [isFloatingMode, setIsFloatingMode] = useState(false);
 
