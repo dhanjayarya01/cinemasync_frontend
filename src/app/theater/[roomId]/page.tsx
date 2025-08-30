@@ -2126,7 +2126,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 </div>
 
           {currentVideoType === "screen" && isHost && (
-            <div className="absolute top-4 right-4">
+            <div className="absolute top-18 right-4">
               <Button
                 onClick={handleStopScreenShare}
                 variant="destructive"
