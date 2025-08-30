@@ -18,13 +18,55 @@ export function PWAProvider({ children }: PWAProviderProps) {
   const pathname = usePathname()
   
   // Only show install prompt on landing page (home page)
-  const shouldShowInstallPrompt = pathname === '/' && deferredPrompt && !isInstalled
+  const shouldShowInstallPrompt = (() => {
+    // Check if we're on the landing page using multiple methods
+    const isLandingPage = pathname === '/' || pathname === '' || pathname === undefined;
+    
+    // Fallback check using window.location (for PWA contexts)
+    const isLandingPageFallback = typeof window !== 'undefined' && 
+      (window.location.pathname === '/' || window.location.pathname === '');
+    
+    const finalIsLandingPage = isLandingPage || isLandingPageFallback;
+    
+    // Check if user has dismissed the prompt
+    const hasDismissed = localStorage.getItem('pwa-install-dismissed') === 'true';
+    
+    // Check if PWA is already installed
+    const isAlreadyInstalled = isInstalled;
+    
+    // Check if we have a deferred prompt
+    const hasDeferredPrompt = deferredPrompt !== null;
+    
+    // Debug logging (only in development)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('PWA Install Prompt Debug:', {
+        pathname,
+        windowPathname: typeof window !== 'undefined' ? window.location.pathname : 'N/A',
+        isLandingPage,
+        isLandingPageFallback,
+        finalIsLandingPage,
+        hasDismissed,
+        isAlreadyInstalled,
+        hasDeferredPrompt,
+        shouldShow: finalIsLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed
+      });
+    }
+    
+    return finalIsLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed;
+  })()
 
   useEffect(() => {
     // Check if PWA is already installed
     const checkIfInstalled = () => {
       if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
         setIsInstalled(true)
+      }
+    }
+
+    // Clear dismissed state when user navigates to landing page
+    const clearDismissedOnLanding = () => {
+      if (pathname === '/' || pathname === '') {
+        localStorage.removeItem('pwa-install-dismissed')
       }
     }
 
@@ -71,6 +113,7 @@ export function PWAProvider({ children }: PWAProviderProps) {
     // Initialize
     checkIfInstalled()
     registerServiceWorker()
+    clearDismissedOnLanding()
 
     // Add event listeners
     window.addEventListener('online', handleOnline)
@@ -93,6 +136,8 @@ export function PWAProvider({ children }: PWAProviderProps) {
       const { outcome } = await deferredPrompt.userChoice
       if (outcome === 'accepted') {
         console.log('PWA installed successfully')
+        // Clear the dismissed state since user installed
+        localStorage.removeItem('pwa-install-dismissed')
       }
       setDeferredPrompt(null)
     }
@@ -112,12 +157,46 @@ export function PWAProvider({ children }: PWAProviderProps) {
     setShowUpdatePrompt(false)
   }
 
+  const handleDismissInstall = () => {
+    setDeferredPrompt(null)
+    // Remember that user dismissed the install prompt
+    localStorage.setItem('pwa-install-dismissed', 'true')
+  }
+
+  // Watch for pathname changes to clear dismissed state on landing page
+  useEffect(() => {
+    if (pathname === '/' || pathname === '') {
+      localStorage.removeItem('pwa-install-dismissed')
+    }
+  }, [pathname]);
+
   return (
     <>
       {children}
       
       {/* Install PWA Prompt - Only on landing page */}
-      {shouldShowInstallPrompt && (
+      {/* Final safety check - completely disable on non-landing pages */}
+      {(pathname === '/' || pathname === '') && shouldShowInstallPrompt && (() => {
+        // Double-check we're on landing page as a safety measure
+        const currentPath = typeof window !== 'undefined' ? window.location.pathname : pathname;
+        const isActuallyOnLanding = currentPath === '/' || currentPath === '';
+        
+        // Debug logging
+        if (process.env.NODE_ENV === 'development') {
+          console.log('PWA Install Prompt Render Check:', {
+            shouldShowInstallPrompt,
+            currentPath,
+            isActuallyOnLanding,
+            pathname,
+            windowPathname: typeof window !== 'undefined' ? window.location.pathname : 'N/A'
+          });
+        }
+        
+        if (!isActuallyOnLanding) {
+          return null;
+        }
+        
+        return (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
             <CardHeader className="pb-3">
@@ -136,17 +215,18 @@ export function PWAProvider({ children }: PWAProviderProps) {
               >
                 Install App
               </Button>
-              <Button 
-                variant="outline" 
-                onClick={() => setDeferredPrompt(null)}
-                className="px-4"
-              >
-                <X className="h-4 w-4" />
-              </Button>
+                             <Button 
+                 variant="outline" 
+                 onClick={handleDismissInstall}
+                 className="px-4"
+               >
+                 <X className="h-4 w-4" />
+               </Button>
             </CardContent>
           </Card>
         </div>
-      )}
+        );
+      })()}
 
       {/* Update PWA Prompt */}
       {showUpdatePrompt && (
