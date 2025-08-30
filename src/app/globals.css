@@ -373,3 +373,12 @@
     font-size: 16px;
   }
 }
+
+/* Hide scrollbars */
+.no-scrollbar::-webkit-scrollbar { 
+  display: none; 
+}
+.no-scrollbar { 
+  -ms-overflow-style: none; 
+  scrollbar-width: none; 
+}

@@ -57,7 +57,6 @@ export default function RoomsPage() {
     name: "",
     description: "",
     movieName: "",
-    movieYear: "",
     movieGenre: "",
     isPrivate: false,
     maxParticipants: 50,
@@ -79,6 +78,17 @@ export default function RoomsPage() {
     setUser(JSON.parse(userData))
     fetchRooms()
   }, [router])
+
+  
+  useEffect(() => {
+    const originalOverflow = typeof window !== 'undefined' ? document.body.style.overflow : ''
+    if (isCreateModalOpen) {
+      document.body.style.overflow = 'hidden'
+    }
+    return () => {
+      if (typeof window !== 'undefined') document.body.style.overflow = originalOverflow
+    }
+  }, [isCreateModalOpen])
 
   const fetchRooms = async () => {
     try {
@@ -139,7 +149,6 @@ export default function RoomsPage() {
           name: newRoom.name,
           description: newRoom.description,
           movieName: newRoom.movieName,
-          movieYear: newRoom.movieYear ? parseInt(newRoom.movieYear) : undefined,
           movieGenre: newRoom.movieGenre,
           isPrivate: newRoom.isPrivate,
           maxParticipants: newRoom.maxParticipants,
@@ -155,12 +164,56 @@ export default function RoomsPage() {
           name: "",
           description: "",
           movieName: "",
-          movieYear: "",
           movieGenre: "",
           isPrivate: false,
           maxParticipants: 50,
           tags: []
         })
+        router.push(`/theater/${data.room.id}`)
+      } else {
+        alert(data.error || 'Failed to create room')
+      }
+    } catch (error) {
+      console.error('Failed to create room:', error)
+      alert('Failed to create room')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSkipRoomCreate = async () => {
+    try {
+      setIsLoading(true)
+      const token = getToken()
+      
+      // Generate a default movie name
+      const defaultMovies = [
+        "The Matrix", "Inception", "Interstellar", "The Dark Knight", 
+        "Pulp Fiction", "Fight Club", "Forrest Gump", "The Shawshank Redemption",
+        "Goodfellas", "The Silence of the Lambs", "The Godfather", "Schindler's List"
+      ]
+      const randomMovie = defaultMovies[Math.floor(Math.random() * defaultMovies.length)]
+
+      const response = await fetch(`${API_BASE_URL}/api/rooms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: `${user.name} room`,
+          description: "skipped room created",
+          movieName: randomMovie,
+          movieGenre: "action",
+          isPrivate: true,
+          maxParticipants: 50,
+          tags: []
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
         router.push(`/theater/${data.room.id}`)
       } else {
         alert(data.error || 'Failed to create room')
@@ -209,7 +262,7 @@ export default function RoomsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 overflow-auto">
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 overflow-auto no-scrollbar">
       {/* Header */}
       <header className="container mx-auto px-4 py-6 relative z-10">
         <nav className="flex items-center justify-between animate-fadeInDown">
@@ -304,14 +357,31 @@ export default function RoomsPage() {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 lg:mb-6">
               <h1 className="text-2xl lg:text-3xl font-bold text-white mb-3 sm:mb-0">Movie Rooms</h1>
 
-              {/* Create Room Button */}
-              <Button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 hover-glow group"
-              >
-                <Plus className="mr-2 h-4 w-4 transition-transform duration-300 group-hover:rotate-90" />
-                Create Room
-              </Button>
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                {/* Skip Room Create Button */}
+                <Button
+                  onClick={handleSkipRoomCreate}
+                  disabled={isLoading}
+                  className="w-full sm:w-auto bg-green-600 hover:bg-green-700 transition-all duration-300 hover:scale-105 hover-glow group"
+                >
+                  {isLoading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="mr-2 h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
+                  )}
+                  Skip Room Create
+                </Button>
+
+                {/* Create Room Button */}
+                <Button
+                  onClick={() => setIsCreateModalOpen(true)}
+                  className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 hover-glow group"
+                >
+                  <Plus className="mr-2 h-4 w-4 transition-transform duration-300 group-hover:rotate-90" />
+                  Create Room
+                </Button>
+              </div>
             </div>
 
             {/* Search */}
@@ -380,7 +450,6 @@ export default function RoomsPage() {
                             </div>
                             <CardDescription className="text-gray-300 group-hover:text-gray-200 transition-colors duration-300 text-sm">
                               <span className="font-medium text-purple-300">Now Playing:</span> {room.movie.name}
-                              {room.movie.year && ` (${room.movie.year})`}
                             </CardDescription>
                           </div>
                           <div className="flex items-center space-x-2 flex-shrink-0">
@@ -481,145 +550,134 @@ export default function RoomsPage() {
         </div>
       </div>
 
-      {/* Create Room Modal - Fully Responsive */}
+      {/* Create Room Modal  */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 bg-black/70 flex items-start sm:items-center justify-center z-50 p-0 sm:p-4">
-          <div className="w-full h-full sm:h-auto sm:max-w-lg sm:max-h-[90vh] flex flex-col">
-            <Card className="w-full h-full sm:h-auto bg-white shadow-2xl rounded-none sm:rounded-lg flex flex-col">
-              <CardHeader className="border-b border-gray-200 p-4 sm:p-6 flex-shrink-0">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <CardTitle className="text-gray-900 text-xl sm:text-2xl">Create New Room</CardTitle>
-                    <CardDescription className="text-gray-600 text-sm sm:text-base mt-1">
-                      Set up your movie room and invite others to join you.
-                    </CardDescription>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setIsCreateModalOpen(false)}
-                    className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2 flex-shrink-0 ml-2"
-                  >
-                    <X className="h-5 w-5" />
-                  </Button>
-                </div>
-              </CardHeader>
-
-              <div className="flex-1 overflow-y-auto">
-                <CardContent className="p-4 sm:p-6 space-y-4 sm:space-y-6">
-                  <div>
-                    <label htmlFor="room-name" className="text-gray-900 text-sm sm:text-base font-medium block mb-2 sm:mb-3">
-                      Room Name *
-                    </label>
-                    <Input
-                      id="room-name"
-                      placeholder="Enter room name"
-                      value={newRoom.name}
-                      onChange={(e) => setNewRoom({ ...newRoom, name: e.target.value })}
-                      className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-12 text-base"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="room-description" className="text-gray-900 text-sm sm:text-base font-medium block mb-2 sm:mb-3">
-                      Description
-                    </label>
-                    <Input
-                      id="room-description"
-                      placeholder="Enter room description (optional)"
-                      value={newRoom.description}
-                      onChange={(e) => setNewRoom({ ...newRoom, description: e.target.value })}
-                      className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-12 text-base"
-                    />
-                  </div>
-
-                  <div>
-                    <label htmlFor="movie-name" className="text-gray-900 text-sm sm:text-base font-medium block mb-2 sm:mb-3">
-                      Movie Name *
-                    </label>
-                    <Input
-                      id="movie-name"
-                      placeholder="Enter movie name"
-                      value={newRoom.movieName}
-                      onChange={(e) => setNewRoom({ ...newRoom, movieName: e.target.value })}
-                      className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-12 text-base"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label htmlFor="movie-year" className="text-gray-900 text-sm sm:text-base font-medium block mb-2 sm:mb-3">
-                        Movie Year
-                      </label>
-                      <Input
-                        id="movie-year"
-                        placeholder="2024"
-                        type="number"
-                        value={newRoom.movieYear}
-                        onChange={(e) => setNewRoom({ ...newRoom, movieYear: e.target.value })}
-                        className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-12 text-base"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="movie-genre" className="text-gray-900 text-sm sm:text-base font-medium block mb-2 sm:mb-3">
-                        Genre
-                      </label>
-                      <Input
-                        id="movie-genre"
-                        placeholder="Action, Drama, etc."
-                        value={newRoom.movieGenre}
-                        onChange={(e) => setNewRoom({ ...newRoom, movieGenre: e.target.value })}
-                        className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-12 text-base"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-gray-900 text-sm sm:text-base font-medium block mb-3 sm:mb-4">Room Type</label>
-                    <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                      <Button
-                        type="button"
-                        variant={!newRoom.isPrivate ? "default" : "outline"}
-                        onClick={() => setNewRoom({ ...newRoom, isPrivate: false })}
-                        className="h-14 sm:h-16 transition-all duration-300 hover:scale-105 text-base sm:text-lg"
-                      >
-                        <Globe className="mr-2 h-5 w-5" />
-                        <span>Public</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={newRoom.isPrivate ? "default" : "outline"}
-                        onClick={() => setNewRoom({ ...newRoom, isPrivate: true })}
-                        className="h-14 sm:h-16 transition-all duration-300 hover:scale-105 text-base sm:text-lg"
-                      >
-                        <Lock className="mr-2 h-5 w-5" />
-                        <span>Private</span>
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="sticky bottom-0 bg-white pt-4 sm:pt-6 border-t sm:border-t-0">
-                    <Button
-                      onClick={handleCreateRoom}
-                      disabled={isLoading || !newRoom.name || !newRoom.movieName}
-                      className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed h-12 sm:h-14 text-base sm:text-lg font-medium"
-                    >
-                      {isLoading ? (
-                        <div className="flex items-center space-x-2">
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                          <span>Creating Room...</span>
-                        </div>
-                      ) : (
-                        "Create Room"
-                      )}
-                    </Button>
-                  </div>
-                </CardContent>
-              </div>
-            </Card>
+  <div className="fixed inset-0 bg-black/70 flex items-start sm:items-center justify-center z-50 p-4">
+    <div className="w-full sm:max-w-lg max-h-[90vh] flex flex-col mx-auto">
+      <Card className="w-full max-h-[90vh] flex flex-col bg-white shadow-2xl rounded-lg">
+        {/* Header */}
+        <CardHeader className="border-b border-gray-200 p-3 sm:p-4 flex-shrink-0">
+          <div className="flex items-start justify-between">
+            <div className="flex-1 min-w-0">
+              <CardTitle className="text-gray-900 text-lg sm:text-xl">Create New Room</CardTitle>
+              <CardDescription className="text-gray-600 text-xs sm:text-sm mt-1">
+                Set up your movie room and invite others to join you.
+              </CardDescription>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsCreateModalOpen(false)}
+              className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full p-2 flex-shrink-0 ml-2"
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
+        </CardHeader>
+
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto no-scrollbar overscroll-contain">
+          <CardContent className="p-3 sm:p-4 space-y-3 sm:space-y-4">
+            <div>
+              <label htmlFor="room-name" className="text-gray-900 text-xs sm:text-sm font-medium block mb-1 sm:mb-2">
+                Room Name *
+              </label>
+              <Input
+                id="room-name"
+                placeholder="Enter room name"
+                value={newRoom.name}
+                onChange={(e) => setNewRoom({ ...newRoom, name: e.target.value })}
+                className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-10 text-sm"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="room-description" className="text-gray-900 text-xs sm:text-sm font-medium block mb-1 sm:mb-2">
+                Description
+              </label>
+              <Input
+                id="room-description"
+                placeholder="Enter room description (optional)"
+                value={newRoom.description}
+                onChange={(e) => setNewRoom({ ...newRoom, description: e.target.value })}
+                className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-10 text-sm"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="movie-name" className="text-gray-900 text-xs sm:text-sm font-medium block mb-1 sm:mb-2">
+                Movie Name *
+              </label>
+              <Input
+                id="movie-name"
+                placeholder="Enter movie name"
+                value={newRoom.movieName}
+                onChange={(e) => setNewRoom({ ...newRoom, movieName: e.target.value })}
+                className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-10 text-sm"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="movie-genre" className="text-gray-900 text-xs sm:text-sm font-medium block mb-1 sm:mb-2">
+                Genre
+              </label>
+              <Input
+                id="movie-genre"
+                placeholder="Action, Drama, etc."
+                value={newRoom.movieGenre}
+                onChange={(e) => setNewRoom({ ...newRoom, movieGenre: e.target.value })}
+                className="bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:ring-2 focus:ring-purple-500 focus:border-transparent h-10 text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="text-gray-900 text-xs sm:text-sm font-medium block mb-2">Room Type</label>
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                <Button
+                  type="button"
+                  variant={!newRoom.isPrivate ? "default" : "outline"}
+                  onClick={() => setNewRoom({ ...newRoom, isPrivate: false })}
+                  className="h-10 sm:h-12 transition-all duration-200 hover:scale-102 text-sm sm:text-sm flex items-center justify-center"
+                >
+                  <Globe className="mr-2 h-4 w-4" />
+                  <span>Public</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant={newRoom.isPrivate ? "default" : "outline"}
+                  onClick={() => setNewRoom({ ...newRoom, isPrivate: true })}
+                  className="h-10 sm:h-12 transition-all duration-200 hover:scale-102 text-sm sm:text-sm flex items-center justify-center"
+                >
+                  <Lock className="mr-2 h-4 w-4" />
+                  <span>Private</span>
+                </Button>
+              </div>
+            </div>
+          </CardContent>
         </div>
-      )}
+
+        {/* Compact Footer */}
+        <div className="flex-shrink-0 border-t bg-white p-3 sm:p-4">
+          <Button
+            onClick={handleCreateRoom}
+            disabled={isLoading || !newRoom.name || !newRoom.movieName}
+            className="w-full bg-purple-600 hover:bg-purple-700 transition-all duration-200 hover:scale-102 disabled:opacity-50 disabled:cursor-not-allowed h-10 sm:h-12 text-sm sm:text-sm font-medium"
+          >
+            {isLoading ? (
+              <div className="flex items-center space-x-2">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Creating...</span>
+              </div>
+            ) : (
+              "Create Room"
+            )}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  </div>
+)}
+
     </div>
   )
 }
