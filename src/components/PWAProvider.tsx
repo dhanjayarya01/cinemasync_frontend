@@ -284,7 +284,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                     className="flex-1 bg-purple-600 hover:bg-purple-700"
                     size="sm"
                   >
-                    Install App
+                    Install  this App
                   </Button>
                   <Button 
                     variant="outline" 
