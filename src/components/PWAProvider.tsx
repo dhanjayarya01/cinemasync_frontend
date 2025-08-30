@@ -14,7 +14,6 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  // store where we captured the prompt (to ensure event fired on "/")
   const [deferredPromptCapturedAt, setDeferredPromptCapturedAt] = useState<string | null>(null);
 
   const [isInstalled, setIsInstalled] = useState(false);
@@ -48,7 +47,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
 
     (window as any).printPWADebug = () => {
       console.info("[PWA DEBUG] state:", {
-        pathname: window.location.pathname,
+        pathname,
         deferredPromptExists: !!deferredPrompt,
         deferredPromptCapturedAt,
         installed: readInstalledMedia(),
@@ -75,19 +74,19 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     };
 
     const handleBeforeInstallPrompt = (e: Event) => {
-      const currentPath = window.location.pathname;
+      // Use pathname from hook instead of window.location
       const dismissed = localStorage.getItem("pwa-install-dismissed") === "true";
       const installedNow =
         window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
 
       console.info("[PWA] beforeinstallprompt event fired", {
-        currentPath,
+        currentPath: pathname,
         dismissed,
         installedNow,
       });
 
       // STRICT: only capture the event if fired while user is on the landing page
-      if (currentPath !== "/" || dismissed || installedNow) {
+      if (pathname !== "/" || dismissed || installedNow) {
         console.info("[PWA] beforeinstallprompt ignored (not on landing / dismissed / installed)");
         // do not preventDefault so browser may use its own flow
         return;
@@ -96,14 +95,15 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       // Prevent default prompt and stash it
       e.preventDefault();
       setDeferredPrompt(e);
-      setDeferredPromptCapturedAt(currentPath);
-      console.info("[PWA] deferredPrompt captured at", currentPath);
+      setDeferredPromptCapturedAt(pathname);
+      console.info("[PWA] deferredPrompt captured at", pathname);
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
       setDeferredPromptCapturedAt(null);
+      setCanShowInstall(false); // Add this line
       try {
         localStorage.setItem("pwa-install-dismissed", "true");
       } catch (err) {
@@ -126,7 +126,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                 }
               });
             }
-          });
+          }
           console.debug("[PWA] service worker registered", registration);
         } catch (err) {
           console.error("[PWA] service worker register failed", err);
@@ -154,8 +154,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("appinstalled", handleAppInstalled);
       console.info("[PWA] removed listeners");
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [pathname]); // Add pathname as dependency
 
   // Strict evaluation: re-evaluate all conditions whenever pathname, deferredPrompt, or install changes
   useEffect(() => {
@@ -164,14 +163,13 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const currentPath = window.location.pathname;
     const dismissed = readDismissed();
     const sessionShown = readSessionShown();
     const installedNow = readInstalledMedia();
 
     // strict rules (must all be true to show)
     const allowed =
-      currentPath === "/" && // must be landing page
+      pathname === "/" && // must be landing page (using hook pathname)
       deferredPrompt !== null && // we have captured event
       deferredPromptCapturedAt === "/" && // it was captured while on '/'
       !installedNow && // not installed
@@ -179,7 +177,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       !sessionShown; // not shown in this session/tab
 
     console.debug("[PWA] strict evaluation", {
-      currentPath,
+      pathname,
       deferredPromptExists: !!deferredPrompt,
       deferredPromptCapturedAt,
       installedNow,
@@ -191,31 +189,19 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     setCanShowInstall(Boolean(allowed));
   }, [pathname, deferredPrompt, deferredPromptCapturedAt, isInstalled]);
 
-  // If user navigates away from landing page, clear any captured prompt to prevent leakage
+  // IMMEDIATELY hide prompt when leaving landing page
   useEffect(() => {
     if (pathname !== "/") {
-      if (deferredPrompt) {
-        console.info("[PWA] leaving '/', clearing deferredPrompt to prevent leakage");
-      }
-      setDeferredPrompt(null);
-      setDeferredPromptCapturedAt(null);
+      console.info("[PWA] not on landing page, ensuring prompt is hidden");
       setCanShowInstall(false);
-    } else {
-      console.debug("[PWA] on landing page '/'");
+      // Clear the prompt to prevent it from showing again if user returns
+      if (deferredPrompt) {
+        console.info("[PWA] clearing deferredPrompt due to navigation away from landing");
+        setDeferredPrompt(null);
+        setDeferredPromptCapturedAt(null);
+      }
     }
   }, [pathname, deferredPrompt]);
-
-  // when the UI is actually visible, mark sessionStorage so it won't re-show in same tab
-  useEffect(() => {
-    if (canShowInstall) {
-      try {
-        sessionStorage.setItem("pwa-install-shown", "true");
-        console.info("[PWA] prompt showing -> sessionStorage.pwa-install-shown = true");
-      } catch (err) {
-        console.warn("[PWA] could not write sessionStorage", err);
-      }
-    }
-  }, [canShowInstall]);
 
   // install handler
   const handleInstallPWA = async () => {
@@ -275,8 +261,8 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     <>
       {children}
 
-      {/* Strict Install UI: only visible when canShowInstall === true */}
-      {canShowInstall && (
+      {/* Strict Install UI: only visible when canShowInstall === true AND on landing page */}
+      {canShowInstall && pathname === "/" && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
             <CardHeader className="pb-3">
