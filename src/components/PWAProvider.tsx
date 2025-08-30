@@ -6,85 +6,110 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshCw, Download, X } from "lucide-react";
 
+/**
+ * Strict PWAProvider with verbose logging.
+ * - Only shows on landing page ("/"), only once (session + persistent dismiss).
+ */
 export function PWAProvider({ children }: { children: React.ReactNode }) {
-  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
-  const [isOnline, setIsOnline] = useState(true);
-
   const pathname = usePathname();
 
-  // safe accessors
-  const getDismissed = () =>
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  // store where we captured the prompt (to ensure event fired on "/")
+  const [deferredPromptCapturedAt, setDeferredPromptCapturedAt] = useState<string | null>(null);
+
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
+
+  // final guard for rendering the UI
+  const [canShowInstall, setCanShowInstall] = useState(false);
+
+  // helpers
+  const readDismissed = () =>
     typeof window !== "undefined" && localStorage.getItem("pwa-install-dismissed") === "true";
-
-  const getSessionShown = () =>
+  const readSessionShown = () =>
     typeof window !== "undefined" && sessionStorage.getItem("pwa-install-shown") === "true";
+  const readInstalledMedia = () =>
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(display-mode: standalone)").matches;
 
-  const [hasDismissed, setHasDismissed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("pwa-install-dismissed") === "true";
-  });
+  // DEV helpers exposed to console
+  if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
+    (window as any).resetPWAPrompt = () => {
+      localStorage.removeItem("pwa-install-dismissed");
+      sessionStorage.removeItem("pwa-install-shown");
+      setDeferredPrompt(null);
+      setDeferredPromptCapturedAt(null);
+      setCanShowInstall(false);
+      console.info("[PWA DEBUG] reset: removed storage keys and cleared prompt");
+      window.location.reload();
+    };
 
-  const [hasShownSession, setHasShownSession] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return sessionStorage.getItem("pwa-install-shown") === "true";
-  });
+    (window as any).printPWADebug = () => {
+      console.info("[PWA DEBUG] state:", {
+        pathname: window.location.pathname,
+        deferredPromptExists: !!deferredPrompt,
+        deferredPromptCapturedAt,
+        installed: readInstalledMedia(),
+        dismissed: readDismissed(),
+        sessionShown: readSessionShown(),
+        canShowInstall,
+      });
+    };
+  }
 
-  // Show only when:
-  // - user is on landing page (/)
-  // - we have a deferred prompt captured (that fired on /)
-  // - app is not installed
-  // - user hasn't permanently dismissed
-  // - user hasn't already seen it in this session
-  const shouldShowInstallPrompt =
-    pathname === "/" && !!deferredPrompt && !isInstalled && !hasDismissed && !hasShownSession;
-
+  // Register listeners (run once)
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // detect installed (standalone)
-    const checkIfInstalled = () => {
-      try {
-        if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) {
-          setIsInstalled(true);
-        }
-      } catch (err) {
-        // no-op
-      }
+    console.info("[PWA] init listeners");
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      console.debug("[PWA] online");
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      console.debug("[PWA] offline");
     };
 
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    // beforeinstallprompt — only capture it if we are on landing and not dismissed/installed.
     const handleBeforeInstallPrompt = (e: Event) => {
-      // If not on landing page right now, ignore the event.
-      // Also ignore if user previously dismissed or app already installed.
       const currentPath = window.location.pathname;
       const dismissed = localStorage.getItem("pwa-install-dismissed") === "true";
-      const installedNow = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+      const installedNow =
+        window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
 
+      console.info("[PWA] beforeinstallprompt event fired", {
+        currentPath,
+        dismissed,
+        installedNow,
+      });
+
+      // STRICT: only capture the event if fired while user is on the landing page
       if (currentPath !== "/" || dismissed || installedNow) {
-        // let browser handle it (don't preventDefault)
+        console.info("[PWA] beforeinstallprompt ignored (not on landing / dismissed / installed)");
+        // do not preventDefault so browser may use its own flow
         return;
       }
 
-      // prevent browser auto-prompt, store event for our custom UI
+      // Prevent default prompt and stash it
       e.preventDefault();
       setDeferredPrompt(e);
+      setDeferredPromptCapturedAt(currentPath);
+      console.info("[PWA] deferredPrompt captured at", currentPath);
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
-      // mark permanently as dismissed/installed so it never shows again
+      setDeferredPromptCapturedAt(null);
       try {
         localStorage.setItem("pwa-install-dismissed", "true");
-        setHasDismissed(true);
       } catch (err) {
         /* ignore */
       }
+      console.info("[PWA] appinstalled -> marked as installed and dismissed permanently");
     };
 
     const registerServiceWorker = async () => {
@@ -97,17 +122,24 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
               newWorker.addEventListener("statechange", () => {
                 if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
                   setShowUpdatePrompt(true);
+                  console.info("[PWA] service worker update found -> show update prompt");
                 }
               });
             }
           });
-        } catch (error) {
-          console.error("Service Worker registration failed:", error);
+          console.debug("[PWA] service worker registered", registration);
+        } catch (err) {
+          console.error("[PWA] service worker register failed", err);
         }
       }
     };
 
-    checkIfInstalled();
+    // initial checks
+    if (readInstalledMedia()) {
+      setIsInstalled(true);
+      console.info("[PWA] detected installed mode (standalone)");
+    }
+
     registerServiceWorker();
 
     window.addEventListener("online", handleOnline);
@@ -120,56 +152,115 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
       window.removeEventListener("appinstalled", handleAppInstalled);
+      console.info("[PWA] removed listeners");
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // only once
+  }, []);
 
-  // If we leave landing page, clear any stored deferred prompt (so it can't leak)
+  // Strict evaluation: re-evaluate all conditions whenever pathname, deferredPrompt, or install changes
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      setCanShowInstall(false);
+      return;
+    }
+
+    const currentPath = window.location.pathname;
+    const dismissed = readDismissed();
+    const sessionShown = readSessionShown();
+    const installedNow = readInstalledMedia();
+
+    // strict rules (must all be true to show)
+    const allowed =
+      currentPath === "/" && // must be landing page
+      deferredPrompt !== null && // we have captured event
+      deferredPromptCapturedAt === "/" && // it was captured while on '/'
+      !installedNow && // not installed
+      !dismissed && // user not permanently dismissed
+      !sessionShown; // not shown in this session/tab
+
+    console.debug("[PWA] strict evaluation", {
+      currentPath,
+      deferredPromptExists: !!deferredPrompt,
+      deferredPromptCapturedAt,
+      installedNow,
+      dismissed,
+      sessionShown,
+      allowed,
+    });
+
+    setCanShowInstall(Boolean(allowed));
+  }, [pathname, deferredPrompt, deferredPromptCapturedAt, isInstalled]);
+
+  // If user navigates away from landing page, clear any captured prompt to prevent leakage
   useEffect(() => {
     if (pathname !== "/") {
+      if (deferredPrompt) {
+        console.info("[PWA] leaving '/', clearing deferredPrompt to prevent leakage");
+      }
       setDeferredPrompt(null);
+      setDeferredPromptCapturedAt(null);
+      setCanShowInstall(false);
+    } else {
+      console.debug("[PWA] on landing page '/'");
     }
-  }, [pathname]);
+  }, [pathname, deferredPrompt]);
 
-  // When the prompt actually becomes visible, mark session shown so it doesn't show again in same tab
+  // when the UI is actually visible, mark sessionStorage so it won't re-show in same tab
   useEffect(() => {
-    if (shouldShowInstallPrompt) {
+    if (canShowInstall) {
       try {
         sessionStorage.setItem("pwa-install-shown", "true");
-        setHasShownSession(true);
+        console.info("[PWA] prompt showing -> sessionStorage.pwa-install-shown = true");
       } catch (err) {
-        /* ignore */
+        console.warn("[PWA] could not write sessionStorage", err);
       }
     }
-  }, [shouldShowInstallPrompt]);
+  }, [canShowInstall]);
 
+  // install handler
   const handleInstallPWA = async () => {
-    if (!deferredPrompt) return;
+    if (!deferredPrompt) {
+      console.warn("[PWA] handleInstallPWA called but no deferredPrompt available");
+      return;
+    }
+    console.info("[PWA] user triggered install prompt");
     try {
       deferredPrompt.prompt();
       const choice = await deferredPrompt.userChoice;
+      console.info("[PWA] userChoice", choice);
       if (choice?.outcome === "accepted") {
-        // mark permanently dismissed/installed
-        localStorage.setItem("pwa-install-dismissed", "true");
-        setHasDismissed(true);
+        try {
+          localStorage.setItem("pwa-install-dismissed", "true");
+          console.info("[PWA] install accepted -> permanent dismiss saved");
+        } catch (err) {
+          console.warn("[PWA] could not persist install state", err);
+        }
+      } else {
+        console.info("[PWA] install dismissed by user via native prompt");
       }
     } catch (err) {
-      console.error("install prompt error", err);
+      console.error("[PWA] error prompting install", err);
     } finally {
       setDeferredPrompt(null);
+      setDeferredPromptCapturedAt(null);
+      setCanShowInstall(false);
     }
   };
 
   const handleDismissInstall = () => {
-    setDeferredPrompt(null);
+    console.info("[PWA] user dismissed custom install UI -> persist dismiss");
     try {
       localStorage.setItem("pwa-install-dismissed", "true");
+      sessionStorage.setItem("pwa-install-shown", "true");
     } catch (err) {
-      /* ignore */
+      console.warn("[PWA] could not persist dismissal", err);
     }
-    setHasDismissed(true);
+    setDeferredPrompt(null);
+    setDeferredPromptCapturedAt(null);
+    setCanShowInstall(false);
   };
 
+  // update handler unchanged
   const handleUpdatePWA = () => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.ready.then((registration) => {
@@ -180,24 +271,12 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     window.location.reload();
   };
 
-  // dev helper: reset prompt (only in dev)
-  if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
-    (window as any).resetPWAPrompt = () => {
-      localStorage.removeItem("pwa-install-dismissed");
-      sessionStorage.removeItem("pwa-install-shown");
-      setHasDismissed(false);
-      setHasShownSession(false);
-      setDeferredPrompt(null);
-      window.location.reload();
-    };
-  }
-
   return (
     <>
       {children}
 
-      {/* Install PWA Prompt - strictly only on landing page and only once */}
-      {shouldShowInstallPrompt && (
+      {/* Strict Install UI: only visible when canShowInstall === true */}
+      {canShowInstall && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
             <CardHeader className="pb-3">
@@ -221,7 +300,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      {/* Update PWA Prompt */}
+      {/* Update and offline UIs unchanged */}
       {showUpdatePrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 border-blue-200 shadow-lg">
@@ -246,7 +325,6 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      {/* Offline Indicator */}
       {!isOnline && (
         <div className="fixed top-4 left-4 right-4 z-50">
           <Card className="bg-orange-50 border-orange-200">
