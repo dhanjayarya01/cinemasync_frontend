@@ -1786,54 +1786,86 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   );
 
   return (
-    <div className="theater-container min-h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900/20 overflow-hidden">
+    <div className="theater-container min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden relative">
+      {/* Animated background elements */}
+      <div className="absolute inset-0 overflow-hidden">
+        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl animate-pulse" style={{animationDelay: '2s'}}></div>
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl animate-pulse" style={{animationDelay: '4s'}}></div>
+      </div>
+
       <div className="fixed top-4 left-4 z-50">
         {showConnectedText ?
-          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-medium shadow-lg animate-pulse">
+          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-medium shadow-xl backdrop-blur-sm border border-emerald-400/20 animate-fade-in">
             ✓ Connected
           </div> :
-          <div className={`w-3 h-3 rounded-full shadow-lg transition-all duration-300 ${webrtcStatus?.connectedPeers > 0 ? "bg-green-500 animate-pulse" : "bg-red-500"}`} />
+          <div className={`w-3 h-3 rounded-full shadow-xl transition-all duration-500 ${webrtcStatus?.connectedPeers > 0 ? "bg-emerald-500 animate-ping" : "bg-red-500"}`} />
         }
       </div>
 
-      <header className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
+      <header className="bg-gradient-to-r from-slate-800/90 via-slate-700/90 to-slate-800/90 border-b border-slate-600/30 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-md shadow-lg">
         <div className="flex items-center justify-between">
-          <Link href="/rooms" className="flex items-center space-x-1 sm:space-x-2 group transition-all duration-300 hover:scale-105">
-            <Play className="h-5 w-5 sm:h-6 sm:w-6 text-purple-400 group-hover:text-purple-300 transition-colors duration-300" />
-            <span className="text-sm sm:text-lg font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">CinemaSync</span>
+          <Link href="/rooms" className="flex items-center space-x-1 sm:space-x-2 group transition-all duration-500 hover:scale-105">
+            <Play className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-400 group-hover:text-emerald-300 transition-all duration-500 group-hover:rotate-12" />
+            <span className="text-sm sm:text-lg font-bold bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">CinemaSync</span>
           </Link>
-          <div className="flex items-center space-x-1 sm:space-x-4">
-            <span className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-green-600/20 to-emerald-600/20 text-green-300 text-xs sm:text-sm rounded-full flex items-center border border-green-500/20 backdrop-blur-sm">
-              <Users className="mr-1 h-3 w-3" />{participants.length}/5
-            </span>
-            {isHost && (
-              <span className="hidden sm:flex px-3 py-1.5 bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-purple-300 text-sm rounded-full items-center border border-purple-500/20 backdrop-blur-sm animate-pulse">
-                <Crown className="mr-1 h-3 w-3" />Host
-              </span>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={generateInviteLink}
-              className="text-white border-purple-500/30 hover:bg-purple-600/20 bg-transparent backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:border-purple-400 text-xs sm:text-sm px-2 sm:px-3"
-            >
-              <Users className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-              <span className="hidden sm:inline">Invite</span>
-            </Button>
-            {user && (
-              <Avatar className="h-6 w-6 sm:h-8 sm:w-8 border-2 border-purple-400 hover:border-purple-300 transition-all duration-300 hover:scale-110 shadow-lg">
-                <AvatarImage src={user.picture || "/placeholder.svg"} />
-                <AvatarFallback className="text-xs bg-gradient-to-br from-purple-600 to-purple-700 text-white">
-                  {user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
-                </AvatarFallback>
-              </Avatar>
-            )}
-          </div>
+                     <div className="flex items-center space-x-1 sm:space-x-4">
+             {/* Participant Avatars - Desktop Only */}
+             <div className="hidden lg:flex items-center space-x-2">
+               {participants.slice(0, 4).map((participant, index) => (
+                 <Avatar 
+                   key={participant.user.id} 
+                   className={`h-6 w-6 border-2 transition-all duration-300 hover:scale-110 shadow-lg ${
+                     participant.user.id === user?.id 
+                       ? 'border-emerald-400 ring-2 ring-emerald-400/30' 
+                       : 'border-slate-500/50'
+                   }`}
+                   title={participant.user.name}
+                 >
+                   <AvatarImage src={participant.user.picture || "/placeholder.svg"} />
+                   <AvatarFallback className="text-xs bg-gradient-to-br from-slate-600 to-slate-700 text-white">
+                     {participant.user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                   </AvatarFallback>
+                 </Avatar>
+               ))}
+               {participants.length > 4 && (
+                 <div className="h-6 w-6 rounded-full bg-gradient-to-r from-slate-600 to-slate-700 border-2 border-slate-500/50 flex items-center justify-center text-xs text-white font-medium shadow-lg">
+                   +{participants.length - 4}
+                 </div>
+               )}
+             </div>
+
+             <span className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-emerald-600/20 to-teal-600/20 text-emerald-300 text-xs sm:text-sm rounded-full flex items-center border border-emerald-500/30 backdrop-blur-sm shadow-lg transition-all duration-300 hover:scale-105">
+               <Users className="mr-1 h-3 w-3" />{participants.length}/5
+             </span>
+             {isHost && (
+               <span className="hidden sm:flex px-3 py-1.5 bg-gradient-to-r from-amber-600/20 to-orange-600/20 text-amber-300 text-sm rounded-full items-center border border-amber-500/30 backdrop-blur-sm shadow-lg animate-pulse">
+                 <Crown className="mr-1 h-3 w-3" />Host
+               </span>
+             )}
+             <Button
+               variant="outline"
+               size="sm"
+               onClick={generateInviteLink}
+               className="text-white border-slate-500/50 hover:bg-slate-600/30 bg-slate-800/50 backdrop-blur-sm transition-all duration-500 hover:scale-105 hover:border-slate-400 text-xs sm:text-sm px-2 sm:px-3 shadow-lg"
+             >
+               <Users className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4" />
+               <span className="hidden sm:inline">Invite</span>
+             </Button>
+             {user && (
+               <Avatar className="h-6 w-6 sm:h-8 sm:w-8 border-2 border-emerald-400 hover:border-emerald-300 transition-all duration-500 hover:scale-110 shadow-xl">
+                 <AvatarImage src={user.picture || "/placeholder.svg"} />
+                 <AvatarFallback className="text-xs bg-gradient-to-br from-emerald-600 to-teal-700 text-white">
+                   {user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                 </AvatarFallback>
+               </Avatar>
+             )}
+           </div>
         </div>
       </header>
 
       {isHost && (
-        <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
+        <div className="bg-gradient-to-r from-slate-800/80 via-slate-700/80 to-slate-800/80 border-b border-slate-600/20 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-md shadow-lg">
           <div className="flex gap-1 sm:gap-2 w-full">
             {/* YouTube Input + Icon Section - 70% mobile, 60% desktop */}
             <div className="flex gap-1 sm:gap-2 w-full sm:w-full">
@@ -1842,8 +1874,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   placeholder="YouTube URL..."
                   value={youtubeUrl}
                   onChange={(e) => handleYouTubeUrlChange(e.target.value)}
-                  className={`bg-gray-800/50 border-gray-600 text-white placeholder:text-gray-400 pr-8 backdrop-blur-sm transition-all duration-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 text-xs sm:text-sm h-8 sm:h-10 ${youtubeError ? 'border-red-500 focus:border-red-400' :
-                    youtubeVideoId ? 'border-green-500 focus:border-green-400' : ''
+                  className={`bg-slate-700/50 border-slate-500 text-white placeholder:text-slate-400 pr-8 backdrop-blur-sm transition-all duration-500 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 text-xs sm:text-sm h-8 sm:h-10 shadow-lg ${youtubeError ? 'border-red-500 focus:border-red-400' :
+                    youtubeVideoId ? 'border-emerald-500 focus:border-emerald-400' : ''
                     }`}
                   disabled={isLoadingVideo}
                 />
@@ -1865,11 +1897,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               </div>
 
               {/* YouTube Status Icon */}
-              <div className={`flex items-center px-2 rounded border backdrop-blur-sm transition-all duration-300 ${youtubeVideoId && !youtubeError
-                ? 'bg-green-600/20 border-green-500/30 animate-pulse'
+              <div className={`flex items-center px-2 rounded border backdrop-blur-sm transition-all duration-500 shadow-lg ${youtubeVideoId && !youtubeError
+                ? 'bg-emerald-600/20 border-emerald-500/30 animate-pulse'
                 : 'bg-red-600/20 border-red-500/30'
                 }`}>
-                <Youtube className={`h-3 w-3 sm:h-4 sm:w-4 transition-colors duration-300 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
+                <Youtube className={`h-3 w-3 sm:h-4 sm:w-4 transition-all duration-500 ${youtubeVideoId && !youtubeError ? 'text-emerald-400' : 'text-red-400'
                   }`} />
               </div>
             </div>
@@ -1914,10 +1946,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFileSelect} className="hidden" />
 
-      <div className={`flex flex-col lg:flex-row ${isHost ? 'h-[calc(100vh-200px)] md:h-[calc(100vh-160px)]' : 'h-[calc(100vh-120px)]'}`}>
-        <div
-          ref={videoContainerRef}
-          className="video-container flex-1 bg-black relative cursor-pointer overflow-hidden min-h-[60vh] lg:min-h-0"
+             <div className={`flex flex-col lg:flex-row ${isHost ? 'h-[calc(100vh-200px)] md:h-[calc(100vh-160px)]' : 'h-[calc(100vh-120px)]'}`}>
+         <div
+           ref={videoContainerRef}
+           className="video-container flex-1 bg-black relative cursor-pointer overflow-hidden min-h-[40vh] lg:min-h-0"
           onMouseMove={handleVideoContainerInteraction}
           onTouchStart={handleVideoContainerInteraction}
           onClick={handleVideoContainerInteraction}
@@ -2124,41 +2156,71 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             </div>
           )}
 
-          {/* Chat overlay component */}
+                     {/* Chat overlay component */}
 
-          <Chat
-            user={user}
-            participants={participants}
-            messages={messages}
-            isVisible={isChatVisible}
-            setIsVisible={setIsChatVisible}
-            isFloatingMode={isFloatingMode}
-            setIsFloatingMode={setIsFloatingMode}
-            message={message}
-            setMessage={setMessage}
-            sendMessage={sendMessage}
-            isRecording={isRecording}
-            startRecording={startRecording}
-            stopRecording={stopRecording}
-            audioBlob={audioBlob}
-            setAudioBlob={setAudioBlob}
-            recordingTime={recordingTime}
-            handleSendVoiceMessage={handleSendVoiceMessage}
-            isSendingVoiceMessage={isSendingVoiceMessage}
-            playVoiceMessage={playVoiceMessage}
-            pauseVoiceMessage={pauseVoiceMessage}
-            playingVoiceMessages={playingVoiceMessages}
-            onVideoVolumeChange={handleVideoVolumeChange}
-            currentVideoVolume={volume}
-            socketManager={socketManager}
-            webrtcManager={webrtcManager}
-            unreadCount={unreadCount}
-            onMarkAsRead={handleMarkAsRead}
-            messageInputRef={messageInputRef}
-            chatContainerRef={chatContainerRef}
-          />
+           <Chat
+             user={user}
+             participants={participants}
+             messages={messages}
+             isVisible={isChatVisible}
+             setIsVisible={setIsChatVisible}
+             isFloatingMode={isFloatingMode}
+             setIsFloatingMode={setIsFloatingMode}
+             message={message}
+             setMessage={setMessage}
+             sendMessage={sendMessage}
+             isRecording={isRecording}
+             startRecording={startRecording}
+             stopRecording={stopRecording}
+             audioBlob={audioBlob}
+             setAudioBlob={setAudioBlob}
+             recordingTime={recordingTime}
+             handleSendVoiceMessage={handleSendVoiceMessage}
+             isSendingVoiceMessage={isSendingVoiceMessage}
+             playVoiceMessage={playVoiceMessage}
+             pauseVoiceMessage={pauseVoiceMessage}
+             playingVoiceMessages={playingVoiceMessages}
+             onVideoVolumeChange={handleVideoVolumeChange}
+             currentVideoVolume={volume}
+             socketManager={socketManager}
+             webrtcManager={webrtcManager}
+             unreadCount={unreadCount}
+             onMarkAsRead={handleMarkAsRead}
+             messageInputRef={messageInputRef}
+             chatContainerRef={chatContainerRef}
+           />
 
-        </div>
+         </div>
+
+         {/* Mobile Participant Avatars Card */}
+         <div className="lg:hidden bg-gradient-to-r from-slate-800/90 to-slate-700/90 border-t border-slate-600/30 p-3 backdrop-blur-md shadow-lg">
+           <div className="flex items-center justify-between mb-2">
+             <span className="text-sm font-medium text-slate-300">Participants ({participants.length})</span>
+             <span className="text-xs text-slate-400">{participants.length}/5</span>
+           </div>
+           <div className="flex items-center space-x-2 overflow-x-auto no-scrollbar">
+             {participants.map((participant) => (
+               <div key={participant.user.id} className="flex flex-col items-center space-y-1 min-w-0">
+                 <Avatar 
+                   className={`h-10 w-10 border-2 transition-all duration-300 hover:scale-110 shadow-lg ${
+                     participant.user.id === user?.id 
+                       ? 'border-emerald-400 ring-2 ring-emerald-400/30' 
+                       : 'border-slate-500/50'
+                   }`}
+                   title={participant.user.name}
+                 >
+                   <AvatarImage src={participant.user.picture || "/placeholder.svg"} />
+                   <AvatarFallback className="text-xs bg-gradient-to-br from-slate-600 to-slate-700 text-white">
+                     {participant.user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
+                   </AvatarFallback>
+                 </Avatar>
+                 <span className="text-xs text-slate-300 truncate max-w-16 text-center">
+                   {participant.user.name}
+                 </span>
+               </div>
+             ))}
+           </div>
+         </div>
       </div>
 
 
