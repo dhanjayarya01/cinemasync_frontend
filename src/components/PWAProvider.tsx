@@ -19,6 +19,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
   
   // Only show install prompt on landing page (home page)
   const shouldShowInstallPrompt = (() => {
+    // Don't show during SSR
+    if (typeof window === 'undefined') return false;
+    
     // Check if we're on the landing page using multiple methods
     const isLandingPage = pathname === '/' || pathname === '' || pathname === undefined;
     
@@ -28,7 +31,7 @@ export function PWAProvider({ children }: PWAProviderProps) {
     
     const finalIsLandingPage = isLandingPage || isLandingPageFallback;
     
-    // Check if user has dismissed the prompt
+    // Check if user has dismissed the prompt (only in browser)
     const hasDismissed = localStorage.getItem('pwa-install-dismissed') === 'true';
     
     // Check if PWA is already installed
@@ -41,7 +44,7 @@ export function PWAProvider({ children }: PWAProviderProps) {
     if (process.env.NODE_ENV === 'development') {
       console.log('PWA Install Prompt Debug:', {
         pathname,
-        windowPathname: typeof window !== 'undefined' ? window.location.pathname : 'N/A',
+        windowPathname: window.location.pathname,
         isLandingPage,
         isLandingPageFallback,
         finalIsLandingPage,
@@ -56,6 +59,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
   })()
 
   useEffect(() => {
+    // Only run in browser environment
+    if (typeof window === 'undefined') return;
+    
     // Check if PWA is already installed
     const checkIfInstalled = () => {
       if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
@@ -66,7 +72,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
     // Clear dismissed state when user navigates to landing page
     const clearDismissedOnLanding = () => {
       if (pathname === '/' || pathname === '') {
-        localStorage.removeItem('pwa-install-dismissed')
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('pwa-install-dismissed')
+        }
       }
     }
 
@@ -137,7 +145,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
       if (outcome === 'accepted') {
         console.log('PWA installed successfully')
         // Clear the dismissed state since user installed
-        localStorage.removeItem('pwa-install-dismissed')
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('pwa-install-dismissed')
+        }
       }
       setDeferredPrompt(null)
     }
@@ -160,15 +170,25 @@ export function PWAProvider({ children }: PWAProviderProps) {
   const handleDismissInstall = () => {
     setDeferredPrompt(null)
     // Remember that user dismissed the install prompt
-    localStorage.setItem('pwa-install-dismissed', 'true')
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('pwa-install-dismissed', 'true')
+    }
   }
 
   // Watch for pathname changes to clear dismissed state on landing page
   useEffect(() => {
+    // Only run in browser environment
+    if (typeof window === 'undefined') return;
+    
     if (pathname === '/' || pathname === '') {
       localStorage.removeItem('pwa-install-dismissed')
     }
   }, [pathname]);
+
+  // Don't render PWA content during SSR
+  if (typeof window === 'undefined') {
+    return <>{children}</>;
+  }
 
   return (
     <>
