@@ -262,11 +262,11 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     <>
       {children}
 
-      {/* Install UI: Full card or minimized cross */}
+      {/* Install UI: Small button or expanded card */}
       {canShowInstall && pathname === "/" && (
         <div className="fixed bottom-4 right-4 z-50">
           {!isMinimized ? (
-            // Full install card
+            // Full install card (when expanded)
             <div className="animate-in slide-in-from-bottom-4 duration-300">
               <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg max-w-sm">
                 <CardHeader className="pb-3">
@@ -288,9 +288,10 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                   </Button>
                   <Button 
                     variant="outline" 
-                    onClick={handleDismissInstall} 
+                    onClick={() => setIsMinimized(true)} 
                     className="px-3"
                     size="sm"
+                    title="Minimize"
                   >
                     <X className="h-4 w-4" />
                   </Button>
@@ -298,28 +299,28 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
               </Card>
             </div>
           ) : (
-            // Minimized cross icon
+            // Small install button (default state)
             <div className="animate-in fade-in duration-200">
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={handleExpandInstall}
-                className="w-10 h-10 rounded-full bg-purple-600 text-white border-purple-600 hover:bg-purple-700 hover:border-purple-700 shadow-lg relative"
-                title="Install CinemaSync App"
-              >
-                <Download className="h-4 w-4" />
-                {/* Small dismiss X in corner */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDismissInstall();
-                  }}
-                  className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center text-white text-xs"
-                  title="Dismiss"
+              <div className="flex flex-col gap-1">
+                {/* Main install button */}
+                <Button
+                  onClick={handleExpandInstall}
+                  className="bg-purple-600 hover:bg-purple-700 text-black shadow-lg text-xs px-3 py-2 h-auto min-w-0"
+                  title="Install CinemaSync App"
                 >
-                  <X className="h-2 w-2" />
-                </button>
-              </Button>
+                  Install
+                </Button>
+                {/* Tiny dismiss button below */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleDismissInstall}
+                  className="w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-100 self-center"
+                  title="Dismiss forever"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
             </div>
           )}
         </div>
