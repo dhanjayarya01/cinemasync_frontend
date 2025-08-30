@@ -68,7 +68,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
 
-  // Invite modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
   const [inviteRoomCode, setInviteRoomCode] = useState('');
@@ -98,7 +97,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const isHost = user?.id === roomInfo?.host?.id;
 
-  // Fix setState warning by using useCallback for video volume change
   const handleVideoVolumeChange = useCallback((vol: number) => {
     setVolume(vol);
     if (videoRef.current) {
