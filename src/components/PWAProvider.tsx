@@ -3,113 +3,61 @@
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { RefreshCw, Download, X } from "lucide-react";
 
-/**
- * Strict PWAProvider with verbose logging.
- * - Only shows on landing page ("/"), only once (session + persistent dismiss).
- */
 export function PWAProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  // store where we captured the prompt (to ensure event fired on "/")
-  const [deferredPromptCapturedAt, setDeferredPromptCapturedAt] = useState<string | null>(null);
+  const [deferredPromptCapturedAt, setDeferredPromptCapturedAt] = useState<
+    string | null
+  >(null);
 
   const [isInstalled, setIsInstalled] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
 
-  // final guard for rendering the UI
-  const [canShowInstall, setCanShowInstall] = useState(false);
+  // New states
+  const [canShowInstall, setCanShowInstall] = useState(false); // big card
+  const [showMiniInstall, setShowMiniInstall] = useState(false); // small button
 
-  // helpers
-  const readDismissed = () =>
-    typeof window !== "undefined" && localStorage.getItem("pwa-install-dismissed") === "true";
+  // --- Helpers ---
   const readSessionShown = () =>
-    typeof window !== "undefined" && sessionStorage.getItem("pwa-install-shown") === "true";
+    typeof window !== "undefined" &&
+    sessionStorage.getItem("pwa-install-shown") === "true";
   const readInstalledMedia = () =>
     typeof window !== "undefined" &&
-    window.matchMedia &&
     window.matchMedia("(display-mode: standalone)").matches;
 
-  // DEV helpers exposed to console
-  if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
-    (window as any).resetPWAPrompt = () => {
-      localStorage.removeItem("pwa-install-dismissed");
-      sessionStorage.removeItem("pwa-install-shown");
-      setDeferredPrompt(null);
-      setDeferredPromptCapturedAt(null);
-      setCanShowInstall(false);
-      console.info("[PWA DEBUG] reset: removed storage keys and cleared prompt");
-      window.location.reload();
-    };
-
-    (window as any).printPWADebug = () => {
-      console.info("[PWA DEBUG] state:", {
-        pathname: window.location.pathname,
-        deferredPromptExists: !!deferredPrompt,
-        deferredPromptCapturedAt,
-        installed: readInstalledMedia(),
-        dismissed: readDismissed(),
-        sessionShown: readSessionShown(),
-        canShowInstall,
-      });
-    };
-  }
-
-  // Register listeners (run once)
+  // --- Setup listeners ---
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    console.info("[PWA] init listeners");
-
-    const handleOnline = () => {
-      setIsOnline(true);
-      console.debug("[PWA] online");
-    };
-    const handleOffline = () => {
-      setIsOnline(false);
-      console.debug("[PWA] offline");
-    };
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
 
     const handleBeforeInstallPrompt = (e: Event) => {
       const currentPath = window.location.pathname;
-      const dismissed = localStorage.getItem("pwa-install-dismissed") === "true";
-      const installedNow =
-        window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+      const installedNow = readInstalledMedia();
 
-      console.info("[PWA] beforeinstallprompt event fired", {
-        currentPath,
-        dismissed,
-        installedNow,
-      });
+      if (currentPath !== "/" || installedNow) return;
 
-      // STRICT: only capture the event if fired while user is on the landing page
-      if (currentPath !== "/" || dismissed || installedNow) {
-        console.info("[PWA] beforeinstallprompt ignored (not on landing / dismissed / installed)");
-        // do not preventDefault so browser may use its own flow
-        return;
-      }
-
-      // Prevent default prompt and stash it
       e.preventDefault();
       setDeferredPrompt(e);
       setDeferredPromptCapturedAt(currentPath);
-      console.info("[PWA] deferredPrompt captured at", currentPath);
     };
 
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
       setDeferredPromptCapturedAt(null);
-      try {
-        localStorage.setItem("pwa-install-dismissed", "true");
-      } catch (err) {
-        /* ignore */
-      }
-      console.info("[PWA] appinstalled -> marked as installed and dismissed permanently");
     };
 
     const registerServiceWorker = async () => {
@@ -120,26 +68,22 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
             const newWorker = registration.installing;
             if (newWorker) {
               newWorker.addEventListener("statechange", () => {
-                if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                if (
+                  newWorker.state === "installed" &&
+                  navigator.serviceWorker.controller
+                ) {
                   setShowUpdatePrompt(true);
-                  console.info("[PWA] service worker update found -> show update prompt");
                 }
               });
             }
           });
-          console.debug("[PWA] service worker registered", registration);
         } catch (err) {
-          console.error("[PWA] service worker register failed", err);
+          console.error("[PWA] sw register failed", err);
         }
       }
     };
 
-    // initial checks
-    if (readInstalledMedia()) {
-      setIsInstalled(true);
-      console.info("[PWA] detected installed mode (standalone)");
-    }
-
+    if (readInstalledMedia()) setIsInstalled(true);
     registerServiceWorker();
 
     window.addEventListener("online", handleOnline);
@@ -150,117 +94,78 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener(
+        "beforeinstallprompt",
+        handleBeforeInstallPrompt
+      );
       window.removeEventListener("appinstalled", handleAppInstalled);
-      console.info("[PWA] removed listeners");
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Strict evaluation: re-evaluate all conditions whenever pathname, deferredPrompt, or install changes
+  // --- Strict evaluation for showing install UI ---
   useEffect(() => {
-    if (typeof window === "undefined") {
-      setCanShowInstall(false);
-      return;
-    }
+    if (typeof window === "undefined") return;
 
     const currentPath = window.location.pathname;
-    const dismissed = readDismissed();
-    const sessionShown = readSessionShown();
-    const installedNow = readInstalledMedia();
-
-    // strict rules (must all be true to show)
     const allowed =
-      currentPath === "/" && // must be landing page
-      deferredPrompt !== null && // we have captured event
-      deferredPromptCapturedAt === "/" && // it was captured while on '/'
-      !installedNow && // not installed
-      !dismissed && // user not permanently dismissed
-      !sessionShown; // not shown in this session/tab
+      currentPath === "/" &&
+      deferredPrompt &&
+      deferredPromptCapturedAt === "/" &&
+      !readInstalledMedia();
 
-    console.debug("[PWA] strict evaluation", {
-      currentPath,
-      deferredPromptExists: !!deferredPrompt,
-      deferredPromptCapturedAt,
-      installedNow,
-      dismissed,
-      sessionShown,
-      allowed,
-    });
-
-    setCanShowInstall(Boolean(allowed));
+    // First time -> show card
+    if (allowed && !readSessionShown()) {
+      setCanShowInstall(true);
+      setShowMiniInstall(false);
+    } else if (allowed) {
+      // Later visits -> always show mini button
+      setCanShowInstall(false);
+      setShowMiniInstall(true);
+    } else {
+      setCanShowInstall(false);
+      setShowMiniInstall(false);
+    }
   }, [pathname, deferredPrompt, deferredPromptCapturedAt, isInstalled]);
 
-  // If user navigates away from landing page, clear any captured prompt to prevent leakage
+  // Clear prompt when leaving landing page
   useEffect(() => {
     if (pathname !== "/") {
-      if (deferredPrompt) {
-        console.info("[PWA] leaving '/', clearing deferredPrompt to prevent leakage");
-      }
       setDeferredPrompt(null);
       setDeferredPromptCapturedAt(null);
       setCanShowInstall(false);
-    } else {
-      console.debug("[PWA] on landing page '/'");
+      setShowMiniInstall(false);
     }
-  }, [pathname, deferredPrompt]);
+  }, [pathname]);
 
-  // when the UI is actually visible, mark sessionStorage so it won't re-show in same tab
+  // Mark sessionStorage when full card shown
   useEffect(() => {
     if (canShowInstall) {
-      try {
-        sessionStorage.setItem("pwa-install-shown", "true");
-        console.info("[PWA] prompt showing -> sessionStorage.pwa-install-shown = true");
-      } catch (err) {
-        console.warn("[PWA] could not write sessionStorage", err);
-      }
+      sessionStorage.setItem("pwa-install-shown", "true");
     }
   }, [canShowInstall]);
 
-  // install handler
+  // --- Handlers ---
   const handleInstallPWA = async () => {
-    if (!deferredPrompt) {
-      console.warn("[PWA] handleInstallPWA called but no deferredPrompt available");
-      return;
-    }
-    console.info("[PWA] user triggered install prompt");
+    if (!deferredPrompt) return;
     try {
       deferredPrompt.prompt();
-      const choice = await deferredPrompt.userChoice;
-      console.info("[PWA] userChoice", choice);
-      if (choice?.outcome === "accepted") {
-        try {
-          localStorage.setItem("pwa-install-dismissed", "true");
-          console.info("[PWA] install accepted -> permanent dismiss saved");
-        } catch (err) {
-          console.warn("[PWA] could not persist install state", err);
-        }
-      } else {
-        console.info("[PWA] install dismissed by user via native prompt");
-      }
+      await deferredPrompt.userChoice;
     } catch (err) {
-      console.error("[PWA] error prompting install", err);
+      console.error("[PWA] install error", err);
     } finally {
       setDeferredPrompt(null);
       setDeferredPromptCapturedAt(null);
       setCanShowInstall(false);
+      setShowMiniInstall(true); // always keep small button after
     }
   };
 
   const handleDismissInstall = () => {
-    console.info("[PWA] user dismissed custom install UI -> persist dismiss");
-    try {
-      localStorage.setItem("pwa-install-dismissed", "true");
-      sessionStorage.setItem("pwa-install-shown", "true");
-    } catch (err) {
-      console.warn("[PWA] could not persist dismissal", err);
-    }
-    setDeferredPrompt(null);
-    setDeferredPromptCapturedAt(null);
+    sessionStorage.setItem("pwa-install-shown", "true"); // only hide full card for this session
     setCanShowInstall(false);
+    setShowMiniInstall(true); // still show mini button
   };
 
-  // update handler unchanged
   const handleUpdatePWA = () => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.ready.then((registration) => {
@@ -271,11 +176,12 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     window.location.reload();
   };
 
+  // --- UI ---
   return (
     <>
       {children}
 
-      {/* Strict Install UI: only visible when canShowInstall === true */}
+      {/* Install UI (full card - first visit) */}
       {canShowInstall && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
@@ -285,14 +191,22 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                 Install CinemaSync
               </CardTitle>
               <CardDescription>
-                Install our app for a better experience with offline support and quick access.
+                Install our app for a better experience with offline support and
+                quick access.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex gap-2">
-              <Button onClick={handleInstallPWA} className="flex-1 bg-purple-600 hover:bg-purple-700">
-                Install this app App
+              <Button
+                onClick={handleInstallPWA}
+                className="flex-1 bg-purple-600 hover:bg-purple-700"
+              >
+                Install App
               </Button>
-              <Button variant="outline" onClick={handleDismissInstall} className="px-4">
+              <Button
+                variant="outline"
+                onClick={handleDismissInstall}
+                className="px-4"
+              >
                 <X className="h-4 w-4" />
               </Button>
             </CardContent>
@@ -300,7 +214,19 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      {/* Update and offline UIs unchanged */}
+      {/* Mini Install Button (always available after first visit) */}
+      {showMiniInstall && (
+        <div className="fixed bottom-4 left-4 z-50">
+          <Button
+            onClick={handleInstallPWA}
+            className="rounded-full shadow-lg bg-purple-600 hover:bg-purple-700 px-4 py-2"
+          >
+            <Download className="h-4 w-4 mr-1" /> Install App
+          </Button>
+        </div>
+      )}
+
+      {/* Update UI */}
       {showUpdatePrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 border-blue-200 shadow-lg">
@@ -310,14 +236,21 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
                 Update Available
               </CardTitle>
               <CardDescription>
-                A new version of CinemaSync is available. Update now for the latest features.
+                A new version is available. Update now for the latest features.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex gap-2">
-              <Button onClick={handleUpdatePWA} className="flex-1 bg-blue-600 hover:bg-blue-700">
+              <Button
+                onClick={handleUpdatePWA}
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
                 Update Now
               </Button>
-              <Button variant="outline" onClick={() => setShowUpdatePrompt(false)} className="px-4">
+              <Button
+                variant="outline"
+                onClick={() => setShowUpdatePrompt(false)}
+                className="px-4"
+              >
                 <X className="h-4 w-4" />
               </Button>
             </CardContent>
@@ -325,13 +258,16 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
+      {/* Offline UI */}
       {!isOnline && (
         <div className="fixed top-4 left-4 right-4 z-50">
           <Card className="bg-orange-50 border-orange-200">
             <CardContent className="p-3">
               <div className="flex items-center gap-2 text-orange-800">
                 <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
-                <span className="text-sm font-medium">You're offline. Some features may be limited.</span>
+                <span className="text-sm font-medium">
+                  You're offline. Some features may be limited.
+                </span>
               </div>
             </CardContent>
           </Card>
