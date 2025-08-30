@@ -1850,7 +1850,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                className="text-white border-slate-500/50 hover:bg-slate-600/30 bg-slate-800/50 backdrop-blur-sm transition-all duration-500 hover:scale-105 hover:border-slate-400 text-xs sm:text-sm px-2 sm:px-3 shadow-lg"
              >
                <Users className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4" />
-               <span className="hidden sm:inline">Invite</span>
+               <span className="inline">Invite</span>
              </Button>
              {user && (
                <Avatar className="h-6 w-6 sm:h-8 sm:w-8 border-2 border-emerald-400 hover:border-emerald-300 transition-all duration-500 hover:scale-110 shadow-xl">
