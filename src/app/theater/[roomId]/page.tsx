@@ -686,28 +686,31 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
           
-          const wasHost = webrtcManager.isHostUser();
           const isNowHost = currentUser.id === room.host?.id;
           
+          webrtcManager.setLocalUserId(currentUser.id);
           webrtcManager.setHostStatus(isNowHost);
           webrtcManager.ensureSocketListeners();
           
-          if (isNowHost) {
-            webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
-          } else {
-            // For non-host users, establish connection with the host
-            const hostId = room.host?.id;
-            if (hostId && hostId !== currentUser.id) {
-              // Retry connection multiple times for new users
-              for (let i = 0; i < 3; i++) {
+          // Delay WebRTC connections to ensure socket room is fully established
+          setTimeout(() => {
+            if (!mounted) return;
+            
+            if (isNowHost) {
+              webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+            } else {
+              // For non-host users, establish connection with the host
+              const hostId = room.host?.id;
+              if (hostId && hostId !== currentUser.id) {
+                // Single delayed connection attempt
                 setTimeout(() => {
                   if (mounted) {
                     webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
                   }
-                }, 1000 + (i * 2000)); // 1s, 3s, 5s delays
+                }, 1500);
               }
             }
-          }
+          }, 1000);
           
           setIsLoading(false);
         });

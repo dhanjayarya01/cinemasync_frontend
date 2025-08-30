@@ -410,14 +410,31 @@ class WebRTCManager {
 
   private handlePeerJoined(peerId: string) {
     if (this.isHost) {
+      // Host waits a bit longer to ensure the peer is ready
       setTimeout(() => {
-        this.createOfferWithRetries(peerId, 4, 800).catch(() => {})
-      }, 1000)
+        this.createOfferWithRetries(peerId, 4, 1200).catch(() => {})
+      }, 2000)
     } else {
+      // Non-host users wait for host to initiate
       setTimeout(() => {
         this.initializePeerConnection(peerId, false).catch(() => {})
-      }, 1500)
+      }, 1000)
     }
+  }
+
+  // Add public method for external retry calls
+  public createOfferWithRetriesPublic(peerId: string, attempts = 3, delayMs = 1000) {
+    return this.createOfferWithRetries(peerId, attempts, delayMs)
+  }
+
+  public getConnectedPeers(): string[] {
+    return Array.from(this.peers.entries())
+      .filter(([_, peer]) => peer.isConnected)
+      .map(([peerId, _]) => peerId)
+  }
+
+  public isHostUser(): boolean {
+    return this.isHost
   }
 
   private handlePeerLeft(peerId: string) {

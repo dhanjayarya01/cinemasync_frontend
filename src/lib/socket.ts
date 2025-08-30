@@ -111,9 +111,10 @@ class SocketManager {
       transports: ['websocket', 'polling'],
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: Infinity,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
+      reconnectionDelayMax: 8000,
+      timeout: 10000,
       auth: options?.auth || (token ? { token } : undefined),
       forceNew: true
     })
@@ -171,6 +172,10 @@ class SocketManager {
     })
 
     this.socket.on('user-left', (data) => {
+      if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants))
+    })
+
+    this.socket.on('participants-updated', (data) => {
       if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants))
     })
 
@@ -260,43 +265,95 @@ class SocketManager {
   }
 
   joinRoom(roomId: string): Promise<any> {
-    if (!this.socket) {
-      return new Promise((resolve, reject) => {
-        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
-        this.connect()
-      })
-    }
-
-    if (!this.isConnected) {
-      return new Promise((resolve, reject) => {
-        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
-        try { this.connect() } catch (e) {}
-      })
-    }
-
-    if (!this.isAuthenticated) {
-      return new Promise((resolve, reject) => {
-        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
-        try { this.authenticate() } catch (e) {}
-      })
-    }
-
-    this.roomId = roomId
-    this.socket.emit('join-room', { roomId })
     return new Promise((resolve, reject) => {
-      const onJoined = (room: any) => {
-        if (room && room.id === roomId) {
-          resolve(room)
-          off()
+      const attemptJoin = async (attempt = 1) => {
+        try {
+          // Ensure socket is connected
+          if (!this.socket || !this.isConnected) {
+            this.connect()
+            await this.waitForConnection(5000)
+          }
+
+          // Ensure authentication
+          if (!this.isAuthenticated) {
+            this.authenticate()
+            await this.waitForAuthentication(5000)
+          }
+
+          // Now attempt to join room
+          this.roomId = roomId
+          this.socket!.emit('join-room', { roomId })
+
+          // Wait for room-joined event with timeout
+          const joinTimeout = setTimeout(() => {
+            if (attempt < 3) {
+              console.log(`[Socket] Join attempt ${attempt} failed, retrying...`)
+              attemptJoin(attempt + 1)
+            } else {
+              reject(new Error('Failed to join room after 3 attempts'))
+            }
+          }, 8000)
+
+          const onJoined = (room: any) => {
+            if (room && room.id === roomId) {
+              clearTimeout(joinTimeout)
+              resolve(room)
+            }
+          }
+
+          const cleanup = this.onRoomInfo(onJoined)
+          
+          // Store cleanup for timeout
+          setTimeout(() => cleanup(), 10000)
+
+        } catch (error) {
+          if (attempt < 3) {
+            setTimeout(() => attemptJoin(attempt + 1), 1000)
+          } else {
+            reject(error)
+          }
         }
       }
-      let off = this.onRoomInfo(onJoined)
-      const t = setTimeout(() => {
-        reject(new Error('join-room timeout'))
-        off()
-      }, 15000)
-      const origOff = off
-      off = () => { clearTimeout(t); origOff() }
+
+      attemptJoin()
+    })
+  }
+
+  private waitForConnection(timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.isConnected) {
+        resolve()
+        return
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('Connection timeout'))
+      }, timeoutMs)
+
+      const cleanup = this.onConnect(() => {
+        clearTimeout(timeout)
+        cleanup()
+        resolve()
+      })
+    })
+  }
+
+  private waitForAuthentication(timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.isAuthenticated) {
+        resolve()
+        return
+      }
+
+      const timeout = setTimeout(() => {
+        reject(new Error('Authentication timeout'))
+      }, timeoutMs)
+
+      const cleanup = this.onAuthenticated(() => {
+        clearTimeout(timeout)
+        cleanup()
+        resolve()
+      })
     })
   }
 
