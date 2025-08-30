@@ -11,28 +11,66 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+
   const pathname = usePathname();
 
-  
+  // safe accessors
+  const getDismissed = () =>
+    typeof window !== "undefined" && localStorage.getItem("pwa-install-dismissed") === "true";
+
+  const getSessionShown = () =>
+    typeof window !== "undefined" && sessionStorage.getItem("pwa-install-shown") === "true";
+
+  const [hasDismissed, setHasDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("pwa-install-dismissed") === "true";
+  });
+
+  const [hasShownSession, setHasShownSession] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem("pwa-install-shown") === "true";
+  });
+
+  // Show only when:
+  // - user is on landing page (/)
+  // - we have a deferred prompt captured (that fired on /)
+  // - app is not installed
+  // - user hasn't permanently dismissed
+  // - user hasn't already seen it in this session
   const shouldShowInstallPrompt =
-    pathname === "/" &&
-    deferredPrompt !== null &&
-    !isInstalled &&
-    localStorage.getItem("pwa-install-dismissed") !== "true";
+    pathname === "/" && !!deferredPrompt && !isInstalled && !hasDismissed && !hasShownSession;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    // detect installed (standalone)
     const checkIfInstalled = () => {
-      if (window.matchMedia("(display-mode: standalone)").matches) {
-        setIsInstalled(true);
+      try {
+        if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) {
+          setIsInstalled(true);
+        }
+      } catch (err) {
+        // no-op
       }
     };
 
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
 
+    // beforeinstallprompt — only capture it if we are on landing and not dismissed/installed.
     const handleBeforeInstallPrompt = (e: Event) => {
+      // If not on landing page right now, ignore the event.
+      // Also ignore if user previously dismissed or app already installed.
+      const currentPath = window.location.pathname;
+      const dismissed = localStorage.getItem("pwa-install-dismissed") === "true";
+      const installedNow = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+
+      if (currentPath !== "/" || dismissed || installedNow) {
+        // let browser handle it (don't preventDefault)
+        return;
+      }
+
+      // prevent browser auto-prompt, store event for our custom UI
       e.preventDefault();
       setDeferredPrompt(e);
     };
@@ -40,6 +78,13 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     const handleAppInstalled = () => {
       setIsInstalled(true);
       setDeferredPrompt(null);
+      // mark permanently as dismissed/installed so it never shows again
+      try {
+        localStorage.setItem("pwa-install-dismissed", "true");
+        setHasDismissed(true);
+      } catch (err) {
+        /* ignore */
+      }
     };
 
     const registerServiceWorker = async () => {
@@ -76,29 +121,53 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
       window.removeEventListener("appinstalled", handleAppInstalled);
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only once
 
-  // ✅ Reset prompt when leaving landing page
+  // If we leave landing page, clear any stored deferred prompt (so it can't leak)
   useEffect(() => {
     if (pathname !== "/") {
       setDeferredPrompt(null);
     }
   }, [pathname]);
 
-  const handleInstallPWA = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === "accepted") {
-        localStorage.removeItem("pwa-install-dismissed");
+  // When the prompt actually becomes visible, mark session shown so it doesn't show again in same tab
+  useEffect(() => {
+    if (shouldShowInstallPrompt) {
+      try {
+        sessionStorage.setItem("pwa-install-shown", "true");
+        setHasShownSession(true);
+      } catch (err) {
+        /* ignore */
       }
+    }
+  }, [shouldShowInstallPrompt]);
+
+  const handleInstallPWA = async () => {
+    if (!deferredPrompt) return;
+    try {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice?.outcome === "accepted") {
+        // mark permanently dismissed/installed
+        localStorage.setItem("pwa-install-dismissed", "true");
+        setHasDismissed(true);
+      }
+    } catch (err) {
+      console.error("install prompt error", err);
+    } finally {
       setDeferredPrompt(null);
     }
   };
 
   const handleDismissInstall = () => {
     setDeferredPrompt(null);
-    localStorage.setItem("pwa-install-dismissed", "true");
+    try {
+      localStorage.setItem("pwa-install-dismissed", "true");
+    } catch (err) {
+      /* ignore */
+    }
+    setHasDismissed(true);
   };
 
   const handleUpdatePWA = () => {
@@ -111,11 +180,23 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
     window.location.reload();
   };
 
+  // dev helper: reset prompt (only in dev)
+  if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
+    (window as any).resetPWAPrompt = () => {
+      localStorage.removeItem("pwa-install-dismissed");
+      sessionStorage.removeItem("pwa-install-shown");
+      setHasDismissed(false);
+      setHasShownSession(false);
+      setDeferredPrompt(null);
+      window.location.reload();
+    };
+  }
+
   return (
     <>
       {children}
 
-      {/* Install PWA Prompt - strictly only on landing page */}
+      {/* Install PWA Prompt - strictly only on landing page and only once */}
       {shouldShowInstallPrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
