@@ -1095,7 +1095,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       setYoutubeContainerKey(0);
 
-      // Clear the connection check interval
+      // Clear the connection check interval testing
       if (connectionCheckInterval) {
         clearInterval(connectionCheckInterval);
       }
