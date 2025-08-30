@@ -22,17 +22,17 @@ export function PWAProvider({ children }: PWAProviderProps) {
     // Don't show during SSR
     if (typeof window === 'undefined') return false;
     
-    // Check if we're on the landing page using multiple methods
-    const isLandingPage = pathname === '/' || pathname === '' || pathname === undefined;
-    
-    // Fallback check using window.location (for PWA contexts)
-    const isLandingPageFallback = typeof window !== 'undefined' && 
-      (window.location.pathname === '/' || window.location.pathname === '');
-    
-    const finalIsLandingPage = isLandingPage || isLandingPageFallback;
-    
-    // Check if user has dismissed the prompt (only in browser)
+    // Check if user has dismissed the prompt FIRST (this is the most important check)
     const hasDismissed = localStorage.getItem('pwa-install-dismissed') === 'true';
+    if (hasDismissed) {
+      return false; // Never show again if dismissed
+    }
+    
+    // Get current path from window.location (more reliable than usePathname in PWA)
+    const currentPath = window.location.pathname;
+    
+    // Only show on landing page
+    const isLandingPage = currentPath === '/' || currentPath === '';
     
     // Check if PWA is already installed
     const isAlreadyInstalled = isInstalled;
@@ -44,18 +44,16 @@ export function PWAProvider({ children }: PWAProviderProps) {
     if (process.env.NODE_ENV === 'development') {
       console.log('PWA Install Prompt Debug:', {
         pathname,
-        windowPathname: window.location.pathname,
+        currentPath,
         isLandingPage,
-        isLandingPageFallback,
-        finalIsLandingPage,
         hasDismissed,
         isAlreadyInstalled,
         hasDeferredPrompt,
-        shouldShow: finalIsLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed
+        shouldShow: isLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed
       });
     }
     
-    return finalIsLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed;
+    return isLandingPage && hasDeferredPrompt && !isAlreadyInstalled;
   })()
 
   useEffect(() => {
@@ -69,13 +67,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
       }
     }
 
-    // Clear dismissed state when user navigates to landing page
+    // No need to clear dismissed state - keep it permanent
     const clearDismissedOnLanding = () => {
-      if (pathname === '/' || pathname === '') {
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('pwa-install-dismissed')
-        }
-      }
+      // Do nothing - keep dismissal state permanent
     }
 
     // Handle online/offline status
@@ -169,25 +163,36 @@ export function PWAProvider({ children }: PWAProviderProps) {
 
   const handleDismissInstall = () => {
     setDeferredPrompt(null)
-    // Remember that user dismissed the install prompt
+    // Remember that user dismissed the install prompt - persist this permanently
     if (typeof window !== 'undefined') {
       localStorage.setItem('pwa-install-dismissed', 'true')
+      // Also set a timestamp to remember when it was dismissed
+      localStorage.setItem('pwa-install-dismissed-time', Date.now().toString())
     }
   }
 
-  // Watch for pathname changes to clear dismissed state on landing page
-  useEffect(() => {
-    // Only run in browser environment
-    if (typeof window === 'undefined') return;
-    
-    if (pathname === '/' || pathname === '') {
-      localStorage.removeItem('pwa-install-dismissed')
-    }
-  }, [pathname]);
+  // No need to watch pathname changes - dismissal is permanent
+  // useEffect(() => {
+  //   // Only run in browser environment
+  //   if (typeof window === 'undefined') return;
+  //   
+  //   if (pathname === '/' || pathname === '') {
+  //     localStorage.removeItem('pwa-install-dismissed')
+  //   }
+  // }, [pathname]);
 
   // Don't render PWA content during SSR
   if (typeof window === 'undefined') {
     return <>{children}</>;
+  }
+
+  // Development helper: Add reset function to window for testing
+  if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
+    (window as any).resetPWAPrompt = () => {
+      localStorage.removeItem('pwa-install-dismissed');
+      localStorage.removeItem('pwa-install-dismissed-time');
+      window.location.reload();
+    };
   }
 
   return (
@@ -195,10 +200,9 @@ export function PWAProvider({ children }: PWAProviderProps) {
       {children}
       
       {/* Install PWA Prompt - Only on landing page */}
-      {/* Final safety check - completely disable on non-landing pages */}
-      {(pathname === '/' || pathname === '') && shouldShowInstallPrompt && (() => {
+      {shouldShowInstallPrompt && (() => {
         // Double-check we're on landing page as a safety measure
-        const currentPath = typeof window !== 'undefined' ? window.location.pathname : pathname;
+        const currentPath = window.location.pathname;
         const isActuallyOnLanding = currentPath === '/' || currentPath === '';
         
         // Debug logging
@@ -207,8 +211,7 @@ export function PWAProvider({ children }: PWAProviderProps) {
             shouldShowInstallPrompt,
             currentPath,
             isActuallyOnLanding,
-            pathname,
-            windowPathname: typeof window !== 'undefined' ? window.location.pathname : 'N/A'
+            pathname
           });
         }
         
