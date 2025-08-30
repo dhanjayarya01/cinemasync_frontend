@@ -709,7 +709,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         await waitForSocketAuth(token);
         authInFlight = false;
 
-        // Add connection monitoring
+        // Add connection monitoring for the host like hos
         socketManager.onConnect(() => {
           if (!mounted) return;
           setConnectionStatus('connecting');
