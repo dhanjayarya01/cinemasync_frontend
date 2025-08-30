@@ -162,3 +162,4 @@ For more information about PWA development, visit:
 - [MDN Web Docs - Progressive Web Apps](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps)
 - [Web.dev - PWA](https://web.dev/progressive-web-apps/)
 - [PWA Builder](https://www.pwabuilder.com/)
+

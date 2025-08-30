@@ -1,225 +1,122 @@
-"use client"
+"use client";
 
-import { useEffect, useState } from 'react'
-import { usePathname } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { RefreshCw, Download, X } from 'lucide-react'
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { RefreshCw, Download, X } from "lucide-react";
 
-interface PWAProviderProps {
-  children: React.ReactNode
-}
+export function PWAProvider({ children }: { children: React.ReactNode }) {
+  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const pathname = usePathname();
 
-export function PWAProvider({ children }: PWAProviderProps) {
-  const [showUpdatePrompt, setShowUpdatePrompt] = useState(false)
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
-  const [isInstalled, setIsInstalled] = useState(false)
-  const [isOnline, setIsOnline] = useState(true)
-  const pathname = usePathname()
   
-  // Only show install prompt on landing page (home page)
-  const shouldShowInstallPrompt = (() => {
-    // Don't show during SSR
-    if (typeof window === 'undefined') return false;
-    
-    // Check if user has dismissed the prompt FIRST (this is the most important check)
-    const hasDismissed = localStorage.getItem('pwa-install-dismissed') === 'true';
-    if (hasDismissed) {
-      return false; // Never show again if dismissed
-    }
-    
-    // Get current path from window.location (more reliable than usePathname in PWA)
-    const currentPath = window.location.pathname;
-    
-    // Only show on landing page
-    const isLandingPage = currentPath === '/' || currentPath === '';
-    
-    // Check if PWA is already installed
-    const isAlreadyInstalled = isInstalled;
-    
-    // Check if we have a deferred prompt
-    const hasDeferredPrompt = deferredPrompt !== null;
-    
-    // Debug logging (only in development)
-    if (process.env.NODE_ENV === 'development') {
-      console.log('PWA Install Prompt Debug:', {
-        pathname,
-        currentPath,
-        isLandingPage,
-        hasDismissed,
-        isAlreadyInstalled,
-        hasDeferredPrompt,
-        shouldShow: isLandingPage && hasDeferredPrompt && !isAlreadyInstalled && !hasDismissed
-      });
-    }
-    
-    return isLandingPage && hasDeferredPrompt && !isAlreadyInstalled;
-  })()
+  const shouldShowInstallPrompt =
+    pathname === "/" &&
+    deferredPrompt !== null &&
+    !isInstalled &&
+    localStorage.getItem("pwa-install-dismissed") !== "true";
 
   useEffect(() => {
-    // Only run in browser environment
-    if (typeof window === 'undefined') return;
-    
-    // Check if PWA is already installed
+    if (typeof window === "undefined") return;
+
     const checkIfInstalled = () => {
-      if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) {
-        setIsInstalled(true)
+      if (window.matchMedia("(display-mode: standalone)").matches) {
+        setIsInstalled(true);
       }
-    }
+    };
 
-    // No need to clear dismissed state - keep it permanent
-    const clearDismissedOnLanding = () => {
-      // Do nothing - keep dismissal state permanent
-    }
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
 
-    // Handle online/offline status
-    const handleOnline = () => setIsOnline(true)
-    const handleOffline = () => setIsOnline(false)
-
-    // Handle beforeinstallprompt event
     const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault()
-      setDeferredPrompt(e)
-    }
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
 
-    // Handle appinstalled event
     const handleAppInstalled = () => {
-      setIsInstalled(true)
-      setDeferredPrompt(null)
-    }
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+    };
 
-    // Register service worker
     const registerServiceWorker = async () => {
-      if ('serviceWorker' in navigator) {
+      if ("serviceWorker" in navigator) {
         try {
-          const registration = await navigator.serviceWorker.register('/sw.js')
-          console.log('Service Worker registered:', registration)
-
-          // Handle service worker updates
-          registration.addEventListener('updatefound', () => {
-            const newWorker = registration.installing
+          const registration = await navigator.serviceWorker.register("/sw.js");
+          registration.addEventListener("updatefound", () => {
+            const newWorker = registration.installing;
             if (newWorker) {
-              newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  setShowUpdatePrompt(true)
+              newWorker.addEventListener("statechange", () => {
+                if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                  setShowUpdatePrompt(true);
                 }
-              })
+              });
             }
-          })
+          });
         } catch (error) {
-          console.error('Service Worker registration failed:', error)
+          console.error("Service Worker registration failed:", error);
         }
       }
-    }
+    };
 
-    // Initialize
-    checkIfInstalled()
-    registerServiceWorker()
-    clearDismissedOnLanding()
+    checkIfInstalled();
+    registerServiceWorker();
 
-    // Add event listeners
-    window.addEventListener('online', handleOnline)
-    window.addEventListener('offline', handleOffline)
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
-    window.addEventListener('appinstalled', handleAppInstalled)
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
 
-    // Cleanup
     return () => {
-      window.removeEventListener('online', handleOnline)
-      window.removeEventListener('offline', handleOffline)
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
-      window.removeEventListener('appinstalled', handleAppInstalled)
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  // ✅ Reset prompt when leaving landing page
+  useEffect(() => {
+    if (pathname !== "/") {
+      setDeferredPrompt(null);
     }
-  }, [])
+  }, [pathname]);
 
   const handleInstallPWA = async () => {
     if (deferredPrompt) {
-      deferredPrompt.prompt()
-      const { outcome } = await deferredPrompt.userChoice
-      if (outcome === 'accepted') {
-        console.log('PWA installed successfully')
-        // Clear the dismissed state since user installed
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('pwa-install-dismissed')
-        }
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") {
+        localStorage.removeItem("pwa-install-dismissed");
       }
-      setDeferredPrompt(null)
+      setDeferredPrompt(null);
     }
-  }
-
-  const handleUpdatePWA = () => {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.ready.then((registration) => {
-        registration.waiting?.postMessage({ type: 'SKIP_WAITING' })
-      })
-    }
-    setShowUpdatePrompt(false)
-    window.location.reload()
-  }
-
-  const handleDismissUpdate = () => {
-    setShowUpdatePrompt(false)
-  }
+  };
 
   const handleDismissInstall = () => {
-    setDeferredPrompt(null)
-    // Remember that user dismissed the install prompt - persist this permanently
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('pwa-install-dismissed', 'true')
-      // Also set a timestamp to remember when it was dismissed
-      localStorage.setItem('pwa-install-dismissed-time', Date.now().toString())
+    setDeferredPrompt(null);
+    localStorage.setItem("pwa-install-dismissed", "true");
+  };
+
+  const handleUpdatePWA = () => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.ready.then((registration) => {
+        registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+      });
     }
-  }
-
-  // No need to watch pathname changes - dismissal is permanent
-  // useEffect(() => {
-  //   // Only run in browser environment
-  //   if (typeof window === 'undefined') return;
-  //   
-  //   if (pathname === '/' || pathname === '') {
-  //     localStorage.removeItem('pwa-install-dismissed')
-  //   }
-  // }, [pathname]);
-
-  // Don't render PWA content during SSR
-  if (typeof window === 'undefined') {
-    return <>{children}</>;
-  }
-
-  // Development helper: Add reset function to window for testing
-  if (process.env.NODE_ENV === 'development' && typeof window !== 'undefined') {
-    (window as any).resetPWAPrompt = () => {
-      localStorage.removeItem('pwa-install-dismissed');
-      localStorage.removeItem('pwa-install-dismissed-time');
-      window.location.reload();
-    };
-  }
+    setShowUpdatePrompt(false);
+    window.location.reload();
+  };
 
   return (
     <>
       {children}
-      
-      {/* Install PWA Prompt - Only on landing page */}
-      {shouldShowInstallPrompt && (() => {
-        // Double-check we're on landing page as a safety measure
-        const currentPath = window.location.pathname;
-        const isActuallyOnLanding = currentPath === '/' || currentPath === '';
-        
-        // Debug logging
-        if (process.env.NODE_ENV === 'development') {
-          console.log('PWA Install Prompt Render Check:', {
-            shouldShowInstallPrompt,
-            currentPath,
-            isActuallyOnLanding,
-            pathname
-          });
-        }
-        
-        if (!isActuallyOnLanding) {
-          return null;
-        }
-        
-        return (
+
+      {/* Install PWA Prompt - strictly only on landing page */}
+      {shouldShowInstallPrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
           <Card className="bg-white/95 backdrop-blur-sm border-purple-200 shadow-lg">
             <CardHeader className="pb-3">
@@ -232,29 +129,21 @@ export function PWAProvider({ children }: PWAProviderProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex gap-2">
-              <Button 
-                onClick={handleInstallPWA}
-                className="flex-1 bg-purple-600 hover:bg-purple-700"
-              >
+              <Button onClick={handleInstallPWA} className="flex-1 bg-purple-600 hover:bg-purple-700">
                 Install App
               </Button>
-                             <Button 
-                 variant="outline" 
-                 onClick={handleDismissInstall}
-                 className="px-4"
-               >
-                 <X className="h-4 w-4" />
-               </Button>
+              <Button variant="outline" onClick={handleDismissInstall} className="px-4">
+                <X className="h-4 w-4" />
+              </Button>
             </CardContent>
           </Card>
         </div>
-        );
-      })()}
+      )}
 
       {/* Update PWA Prompt */}
       {showUpdatePrompt && (
         <div className="fixed bottom-4 left-4 right-4 z-50">
-          <Card className="bg-white/95 backdrop-blur-sm border-blue-200 shadow-lg">
+          <Card className="bg-white/95 border-blue-200 shadow-lg">
             <CardHeader className="pb-3">
               <CardTitle className="text-lg flex items-center gap-2">
                 <RefreshCw className="h-5 w-5 text-blue-600" />
@@ -265,17 +154,10 @@ export function PWAProvider({ children }: PWAProviderProps) {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex gap-2">
-              <Button 
-                onClick={handleUpdatePWA}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
-              >
+              <Button onClick={handleUpdatePWA} className="flex-1 bg-blue-600 hover:bg-blue-700">
                 Update Now
               </Button>
-              <Button 
-                variant="outline" 
-                onClick={handleDismissUpdate}
-                className="px-4"
-              >
+              <Button variant="outline" onClick={() => setShowUpdatePrompt(false)} className="px-4">
                 <X className="h-4 w-4" />
               </Button>
             </CardContent>
@@ -297,5 +179,5 @@ export function PWAProvider({ children }: PWAProviderProps) {
         </div>
       )}
     </>
-  )
+  );
 }
