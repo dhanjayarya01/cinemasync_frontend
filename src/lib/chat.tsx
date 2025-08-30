@@ -110,7 +110,7 @@ export default function Chat({
     isLiveVoiceModeRef.current = isLiveVoiceMode;
   }, [isLiveVoiceMode]);
 
-  // NEW: Auto-play voice messages when enabled (fixed to prevent duplicates)
+  // Auto-play voice messages when enabled 
   const playedMessagesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -634,7 +634,7 @@ export default function Chat({
         <button
           onClick={handleFloatingModeToggle}
           title={isFloatingMode ? "Switch to panel" : "Switch to floating"}
-          className="hidden md:inline-flex items-center justify-center px-2 py-1 rounded-full bg-gray-800/60 text-white hover:bg-gray-700/70 text-xs"
+          className="inline-flex items-center justify-center px-2 py-1 rounded-full bg-gray-800/60 text-white hover:bg-gray-700/70 text-xs"
         >
           {isFloatingMode ? "Panel" : "Float"}
         </button>
@@ -1078,7 +1078,7 @@ export default function Chat({
 
                 <button
                   onClick={() => setIsFloatingMode(v => !v)}
-                  className="hidden md:inline-flex items-center justify-center px-2 py-1 rounded bg-transparent text-white/90 hover:bg-white/5 text-xs"
+                  className="inline-flex items-center justify-center px-2 py-1 rounded bg-transparent text-white/90 hover:bg-white/5 text-xs"
                 >
                   {isFloatingMode ? "Panel" : "Float"}
                 </button>

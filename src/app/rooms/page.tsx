@@ -70,12 +70,12 @@ export default function RoomsPage() {
   useEffect(() => {
     const userData = localStorage.getItem("user")
     const token = getToken()
-    
+
     if (!userData || !token) {
       router.push("/auth")
       return
     }
-    
+
     setUser(JSON.parse(userData))
     fetchRooms()
   }, [router])
@@ -88,10 +88,10 @@ export default function RoomsPage() {
       if (token) {
         headers.Authorization = `Bearer ${token}`
       }
-      
+
       const response = await fetch(`${API_BASE_URL}/api/rooms`, { headers })
       const data = await response.json()
-      
+
       if (data.success) {
         setRooms(data.rooms)
       }
@@ -117,10 +117,10 @@ export default function RoomsPage() {
     .sort((a, b) => {
       const aIsOwner = user && a.host.id === user.id;
       const bIsOwner = user && b.host.id === user.id;
-      
+
       if (aIsOwner && !bIsOwner) return -1;
       if (!aIsOwner && bIsOwner) return 1;
-      
+
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     })
 
@@ -128,7 +128,7 @@ export default function RoomsPage() {
     try {
       setIsLoading(true)
       const token = getToken()
-      
+
       const response = await fetch(`${API_BASE_URL}/api/rooms`, {
         method: 'POST',
         headers: {
@@ -148,7 +148,7 @@ export default function RoomsPage() {
       })
 
       const data = await response.json()
-      
+
       if (data.success) {
         setIsCreateModalOpen(false)
         setNewRoom({
@@ -179,7 +179,7 @@ export default function RoomsPage() {
 
   const handleQuickJoin = async () => {
     if (!roomCode.trim()) return
-    
+
     setIsJoining(true)
     try {
       const normalizedRoomCode = roomCode.trim().toLowerCase()
@@ -280,7 +280,7 @@ export default function RoomsPage() {
                 }}
                 className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 uppercase"
               />
-              <Button 
+              <Button
                 onClick={handleQuickJoin}
                 disabled={!roomCode.trim() || isJoining}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
@@ -461,7 +461,7 @@ export default function RoomsPage() {
                   }}
                   className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 transition-all duration-300 focus:bg-white/15 uppercase"
                 />
-                <Button 
+                <Button
                   onClick={handleQuickJoin}
                   disabled={!roomCode.trim() || isJoining}
                   className="w-full bg-blue-600 hover:bg-blue-700 transition-all duration-300 hover:scale-105 disabled:opacity-50"

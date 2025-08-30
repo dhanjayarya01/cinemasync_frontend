@@ -73,10 +73,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const [inviteLink, setInviteLink] = useState('');
   const [inviteRoomCode, setInviteRoomCode] = useState('');
 
- 
-  const [copiedStates, setCopiedStates] = useState<{[key: string]: boolean}>({});
 
-  
+  const [copiedStates, setCopiedStates] = useState<{ [key: string]: boolean }>({});
+
+
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -97,6 +97,45 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const controlsTimeoutRef = useRef<number | null>(null);
 
   const isHost = user?.id === roomInfo?.host?.id;
+
+  // Fix setState warning by using useCallback for video volume change
+  const handleVideoVolumeChange = useCallback((vol: number) => {
+    setVolume(vol);
+    if (videoRef.current) {
+      videoRef.current.volume = vol;
+    }
+    if (isHost) {
+      webrtcManager.setLocalVolume(vol);
+    }
+  }, [isHost]);
+
+  // Fix setState warning by using useCallback for mark as read
+  const handleMarkAsRead = useCallback(() => {
+    setUnreadCount(0);
+  }, []);
+
+  // Mobile viewport optimization
+  useEffect(() => {
+    const handleResize = () => {
+      // Fix mobile viewport height issues
+      const vh = window.innerHeight * 0.01;
+      document.documentElement.style.setProperty('--vh', `${vh}px`);
+    };
+
+    const handleOrientationChange = () => {
+      // Handle orientation changes on mobile
+      setTimeout(handleResize, 100);
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleOrientationChange);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleOrientationChange);
+    };
+  }, []);
 
   // Video controls auto-hide functionality
   const showControlsTemporarily = useCallback(() => {
@@ -192,9 +231,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
     setIsChatVisible(prev => {
       const newVisible = !prev;
       if (newVisible) {
-        
+
         setIsFloatingMode(false);
-        
+
         setTimeout(() => {
           messageInputRef.current?.focus();
         }, 100);
@@ -1187,7 +1226,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       const player = getYTPlayer();
       if (player) {
         try {
-          player.setVolume(v * 100); 
+          player.setVolume(v * 100);
           if (v === 0) {
             player.mute();
           } else {
@@ -1275,7 +1314,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   // Keyboard controls
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      
+
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
@@ -1516,19 +1555,19 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
-      
+
       // Check if click is on chat toggle button or its children
       const chatToggleButton = document.querySelector('[title="Toggle chat"]');
       const isClickOnToggleButton = chatToggleButton && (
-        chatToggleButton.contains(target) || 
+        chatToggleButton.contains(target) ||
         chatToggleButton === target
       );
-      
-      if (isChatVisible && 
-          chatContainerRef.current && 
-          !chatContainerRef.current.contains(target) &&
-          !isClickOnToggleButton &&
-          !isFloatingMode) {
+
+      if (isChatVisible &&
+        chatContainerRef.current &&
+        !chatContainerRef.current.contains(target) &&
+        !isClickOnToggleButton &&
+        !isFloatingMode) {
         setIsChatVisible(false);
       }
     };
@@ -1597,6 +1636,60 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       .ytp-title-expanded-heading,
       .ytp-title-expanded-content {
         display: none !important;
+      }
+
+      /* Mobile viewport optimization */
+      :root {
+        --vh: 1vh;
+      }
+      
+      @media (max-width: 768px) {
+        html, body {
+          overflow-x: hidden;
+          -webkit-overflow-scrolling: touch;
+          height: calc(var(--vh, 1vh) * 100);
+        }
+        
+        /* Prevent zoom on input focus */
+        input, select, textarea {
+          font-size: 16px !important;
+        }
+        
+        /* Video container optimization */
+        video {
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+        }
+        
+        .theater-container {
+          height: calc(var(--vh, 1vh) * 100) !important;
+        }
+      }
+
+      /* Fullscreen video optimization */
+      .video-fullscreen {
+        width: 100vw !important;
+        height: 100vh !important;
+        object-fit: cover !important;
+      }
+      
+      /* Fix video aspect ratio issues */
+      .video-container {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        background: #000;
+      }
+      
+      .video-container video,
+      .video-container iframe {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
       }
     `;
 
@@ -1693,7 +1786,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900/20">
+    <div className="theater-container min-h-screen bg-gradient-to-br from-gray-900 via-black to-purple-900/20 overflow-hidden">
       <div className="fixed top-4 left-4 z-50">
         {showConnectedText ?
           <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 text-white text-xs font-medium shadow-lg animate-pulse">
@@ -1703,18 +1796,18 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
       </div>
 
-      <header className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-4 py-3 backdrop-blur-sm">
+      <header className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
         <div className="flex items-center justify-between">
-          <Link href="/rooms" className="flex items-center space-x-2 group transition-all duration-300 hover:scale-105">
-            <Play className="h-6 w-6 text-purple-400 group-hover:text-purple-300 transition-colors duration-300" />
-            <span className="text-lg font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">CinemaSync</span>
+          <Link href="/rooms" className="flex items-center space-x-1 sm:space-x-2 group transition-all duration-300 hover:scale-105">
+            <Play className="h-5 w-5 sm:h-6 sm:w-6 text-purple-400 group-hover:text-purple-300 transition-colors duration-300" />
+            <span className="text-sm sm:text-lg font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">CinemaSync</span>
           </Link>
-          <div className="flex items-center space-x-4">
-            <span className="px-3 py-1.5 bg-gradient-to-r from-green-600/20 to-emerald-600/20 text-green-300 text-sm rounded-full flex items-center border border-green-500/20 backdrop-blur-sm">
+          <div className="flex items-center space-x-1 sm:space-x-4">
+            <span className="px-2 sm:px-3 py-1 sm:py-1.5 bg-gradient-to-r from-green-600/20 to-emerald-600/20 text-green-300 text-xs sm:text-sm rounded-full flex items-center border border-green-500/20 backdrop-blur-sm">
               <Users className="mr-1 h-3 w-3" />{participants.length}/5
             </span>
             {isHost && (
-              <span className="px-3 py-1.5 bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-purple-300 text-sm rounded-full flex items-center border border-purple-500/20 backdrop-blur-sm animate-pulse">
+              <span className="hidden sm:flex px-3 py-1.5 bg-gradient-to-r from-purple-600/20 to-pink-600/20 text-purple-300 text-sm rounded-full items-center border border-purple-500/20 backdrop-blur-sm animate-pulse">
                 <Crown className="mr-1 h-3 w-3" />Host
               </span>
             )}
@@ -1722,12 +1815,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
               variant="outline"
               size="sm"
               onClick={generateInviteLink}
-              className="text-white border-purple-500/30 hover:bg-purple-600/20 bg-transparent backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:border-purple-400"
+              className="text-white border-purple-500/30 hover:bg-purple-600/20 bg-transparent backdrop-blur-sm transition-all duration-300 hover:scale-105 hover:border-purple-400 text-xs sm:text-sm px-2 sm:px-3"
             >
-              <Users className="mr-2 h-4 w-4" />Invite
+              <Users className="mr-1 sm:mr-2 h-3 w-3 sm:h-4 sm:w-4" />
+              <span className="hidden sm:inline">Invite</span>
             </Button>
             {user && (
-              <Avatar className="h-8 w-8 border-2 border-purple-400 hover:border-purple-300 transition-all duration-300 hover:scale-110 shadow-lg">
+              <Avatar className="h-6 w-6 sm:h-8 sm:w-8 border-2 border-purple-400 hover:border-purple-300 transition-all duration-300 hover:scale-110 shadow-lg">
                 <AvatarImage src={user.picture || "/placeholder.svg"} />
                 <AvatarFallback className="text-xs bg-gradient-to-br from-purple-600 to-purple-700 text-white">
                   {user.name?.split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
@@ -1739,60 +1833,80 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       </header>
 
       {isHost && (
-        <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-4 py-3 backdrop-blur-sm">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1 flex gap-2">
+        <div className="bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-b border-purple-500/20 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-sm">
+          <div className="flex gap-1 sm:gap-2 w-full">
+            {/* YouTube Input + Icon Section - 70% mobile, 60% desktop */}
+            <div className="flex gap-1 sm:gap-2 w-full sm:w-full">
               <div className="relative flex-1">
                 <Input
-                  placeholder="Paste YouTube URL here (auto-plays when pasted)..."
+                  placeholder="YouTube URL..."
                   value={youtubeUrl}
                   onChange={(e) => handleYouTubeUrlChange(e.target.value)}
-                  className={`bg-gray-800/50 border-gray-600 text-white placeholder:text-gray-400 pr-10 backdrop-blur-sm transition-all duration-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 ${youtubeError ? 'border-red-500 focus:border-red-400' :
-                      youtubeVideoId ? 'border-green-500 focus:border-green-400' : ''
+                  className={`bg-gray-800/50 border-gray-600 text-white placeholder:text-gray-400 pr-8 backdrop-blur-sm transition-all duration-300 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 text-xs sm:text-sm h-8 sm:h-10 ${youtubeError ? 'border-red-500 focus:border-red-400' :
+                    youtubeVideoId ? 'border-green-500 focus:border-green-400' : ''
                     }`}
                   disabled={isLoadingVideo}
                 />
                 {isLoadingVideo && (
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
-                    <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
+                  <div className="absolute right-2 top-1/2 transform -translate-y-1/2">
+                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin text-purple-400" />
                   </div>
                 )}
                 {youtubeError && (
-                  <div className="absolute top-full left-0 mt-1 text-xs text-red-400 bg-red-900/30 px-3 py-1.5 rounded-lg z-10 border border-red-500/20 backdrop-blur-sm animate-pulse">
+                  <div className="absolute top-full left-0 mt-1 text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded z-10 border border-red-500/20 backdrop-blur-sm animate-pulse">
                     {youtubeError}
                   </div>
                 )}
                 {youtubeVideoId && !youtubeError && (
-                  <div className="absolute top-full left-0 mt-1 text-xs text-green-400 bg-green-900/30 px-3 py-1.5 rounded-lg z-10 border border-green-500/20 backdrop-blur-sm animate-pulse">
-                    ✓ Valid YouTube URL - Video loaded
+                  <div className="absolute top-full left-0 mt-1 text-xs text-green-400 bg-green-900/30 px-2 py-1 rounded z-10 border border-green-500/20 backdrop-blur-sm animate-pulse">
+                    ✓ Valid
                   </div>
                 )}
               </div>
-              <div className={`flex items-center px-3 rounded-lg border backdrop-blur-sm transition-all duration-300 ${youtubeVideoId && !youtubeError
-                  ? 'bg-green-600/20 border-green-500/30 animate-pulse'
-                  : 'bg-red-600/20 border-red-500/30'
+
+              {/* YouTube Status Icon */}
+              <div className={`flex items-center px-2 rounded border backdrop-blur-sm transition-all duration-300 ${youtubeVideoId && !youtubeError
+                ? 'bg-green-600/20 border-green-500/30 animate-pulse'
+                : 'bg-red-600/20 border-red-500/30'
                 }`}>
-                <Youtube className={`h-4 w-4 transition-colors duration-300 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
+                <Youtube className={`h-3 w-3 sm:h-4 sm:w-4 transition-colors duration-300 ${youtubeVideoId && !youtubeError ? 'text-green-400' : 'text-red-400'
                   }`} />
               </div>
             </div>
-            <div className="flex gap-2">
-              {!/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) && (
+
+            {/* Buttons Section - 30% mobile, 40% desktop */}
+            <div className="w-[20%] sm:w-[30%]">
+              {/* Desktop: Show both buttons */}
+              <div className="hidden sm:flex gap-2 w-full">
                 <Button
                   onClick={handleShareScreen}
                   disabled={isLoadingVideo}
-                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
+                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25 text-[2.4vh] px-0 h-8 sm:h-10 flex-1"
                 >
-                  <Monitor className="mr-2 h-4 w-4" />Share Screen
+                  <Monitor className="mr-1 h-3  w-3 sm:h-4 sm:w-4" />
+                  <span >Share Screen</span>
                 </Button>
-              )}
-              <Button
-                onClick={handleSelectVideo}
-                disabled={isLoadingVideo}
-                className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25"
-              >
-                <Video className="mr-2 h-4 w-4" />Select Video
-              </Button>
+                <Button
+                  onClick={handleSelectVideo}
+                  disabled={isLoadingVideo}
+                  className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25  text-[2.4vh] px-3 h-8 sm:h-10 flex-1"
+                >
+                  <Video className="mr-1 h-3 w-3 sm:h-4 sm:w-4" />
+                  <span>Select Video</span>
+                </Button>
+              </div>
+
+              {/* Mobile: Show only Select Video button */}
+              <div className="sm:hidden w-full">
+                <Button
+                  onClick={handleSelectVideo}
+                  disabled={isLoadingVideo}
+                  className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25 text-[21%] px-2 h-8 w-full"
+                >
+                  <Video className="mr-0 h-3 w-3" />
+                  <span>Video</span>
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -1800,10 +1914,10 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       <input ref={fileInputRef} type="file" accept="video/*" onChange={handleFileSelect} className="hidden" />
 
-      <div className="flex flex-col md:flex-row md:h-[calc(100vh-160px)]">
+      <div className={`flex flex-col lg:flex-row ${isHost ? 'h-[calc(100vh-200px)] md:h-[calc(100vh-160px)]' : 'h-[calc(100vh-120px)]'}`}>
         <div
           ref={videoContainerRef}
-          className="md:flex-1 bg-black relative h-[50vh] md:h-auto cursor-pointer overflow-hidden"
+          className="video-container flex-1 bg-black relative cursor-pointer overflow-hidden min-h-[60vh] lg:min-h-0"
           onMouseMove={handleVideoContainerInteraction}
           onTouchStart={handleVideoContainerInteraction}
           onClick={handleVideoContainerInteraction}
@@ -1818,96 +1932,166 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 />
               </div>
             ) : (
-              <video ref={bindVideo as any} className="w-full h-full object-contain bg-black" autoPlay playsInline />
+              <video
+                ref={bindVideo as any}
+                className="w-full h-full object-cover bg-black"
+                autoPlay
+                playsInline
+                style={{ objectFit: 'cover' }}
+              />
             )}
           </div>
 
           {/* Video Controls with Auto-hide */}
-          <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-4 transition-all duration-300 ${showControls ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'}`}>
-            <div ref={progressBarRef} className="w-full h-3 bg-gray-700/80 rounded-full mb-4 cursor-pointer overflow-hidden" onClick={handleProgressBarClick}>
-              <div className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-300 shadow-lg shadow-purple-500/30" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }} />
-            </div>
+         <div className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2 sm:p-4 transition-all duration-300 ${
+    showControls ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2 pointer-events-none"
+  }`}
+>
+  <div
+    ref={progressBarRef}
+    className="w-full h-2 sm:h-3 bg-gray-700/80 rounded-full mb-2 sm:mb-4 cursor-pointer overflow-hidden"
+    onClick={handleProgressBarClick}
+  >
+    <div
+      className="h-full bg-gradient-to-r from-purple-500 to-pink-500 rounded-full transition-all duration-300 shadow-lg shadow-purple-500/30"
+      style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
+    />
+  </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-3">
-                <Button variant="ghost" size="sm" onClick={handleTogglePlayPause} className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2" title="Play/Pause (Space)">
-                  {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}
-                </Button>
+  <div className="flex flex-1 items-center justify-between ">
+    <div className="flex items-center gap-0 sm:gap-2 md:gap-3 flex-wrap">
+      {/* Play/Pause */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={handleTogglePlayPause}
+        className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-0.5 sm:p-1 md:p-2"
+        title="Play/Pause (Space)"
+      >
+        {isPlaying ? (
+          <Pause className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+        ) : (
+          <Play className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+        )}
+      </Button>
 
-                {/* Seek Backward Button */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={seekBackward}
-                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
-                  title="Seek backward 30s (←)"
-                >
-                  <SkipBack className="h-4 w-4" />
-                </Button>
+      {/* Seek Backward */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={seekBackward}
+        className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-0.5 sm:p-1 md:p-2"
+        title="Seek backward 30s (←)"
+      >
+        <SkipBack className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+      </Button>
 
-                {/* Seek Forward Button */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={seekForward}
-                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
-                  title="Seek forward 30s (→)"
-                >
-                  <SkipForward className="h-4 w-4" />
-                </Button>
+      {/* Seek Forward */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={seekForward}
+        className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-0.5 sm:p-1 md:p-2"
+        title="Seek forward 30s (→)"
+      >
+        <SkipForward className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+      </Button>
 
-                <div className="flex items-center space-x-2">
-                  <Button variant="ghost" size="sm" onClick={handleToggleMute} className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2" title="Mute/Unmute (M)">
-                    {isMuted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                  </Button>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.01"
-                    value={volume}
-                    onChange={handleVolumeChange}
-                    className="w-20 h-2 bg-gray-600/80 rounded-lg appearance-none cursor-pointer"
-                    title="Volume (↑↓)"
-                    style={{
-                      background: `linear-gradient(to right, rgb(168 85 247) 0%, rgb(168 85 247) ${volume * 100}%, rgb(75 85 99 / 0.8) ${volume * 100}%, rgb(75 85 99 / 0.8) 100%)`
-                    }}
-                  />
-                </div>
-                <div className="text-white text-sm font-medium bg-black/50 px-3 py-1 rounded-lg">
-                  {formatTime(currentTime)} / {formatTime(duration)}
-                </div>
-              </div>
+      {/* Volume */}
+      <div className="flex items-center gap-0 sm:gap-1 md:gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleToggleMute}
+          className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-0 m-0"
+          title="Mute/Unmute (M)"
+        >
+          {isMuted ? (
+            <VolumeX className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+          ) : (
+            <Volume2 className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+          )}
+        </Button>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          value={volume}
+          onChange={handleVolumeChange}
+          className="w-16 sm:w-16 md:w-30 h-1 sm:h-1.5 md:h-2 bg-gray-600/80 rounded-lg appearance-none cursor-pointer"
+          title="Volume (↑↓)"
+          style={{
+            background: `linear-gradient(to right, rgb(168 85 247) 0%, rgb(168 85 247) ${
+              volume * 100
+            }%, rgb(75 85 99 / 0.8) ${volume * 100}%, rgb(75 85 99 / 0.8) 100%)`,
+          }}
+        />
+      </div>
 
-              <div className="flex items-center space-x-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleToggleFullscreen}
-                  className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-2"
-                  title="Fullscreen (F)"
-                >
-                  <Maximize className="h-5 w-5" />
-                </Button>
+      {/* Time */}
+      <div className="hidden md:block text-white text-sm font-medium bg-black/50 px-2 md:px-3 py-1 rounded-lg">
+        {formatTime(currentTime)} / {formatTime(duration)}
+      </div>
+    </div>
 
-                <button
-                  className="md:hidden inline-flex items-center justify-center p-2 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all duration-300 hover:scale-110"
-                  onClick={() => {
-                    if (!document.fullscreenElement) {
-                      videoContainerRef.current?.requestFullscreen().catch(() => { });
-                    }
-                    try { (screen as any).orientation?.lock?.("landscape"); } catch { }
-                  }}
-                  title="Mobile landscape"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                    <rect x="6" y="3" width="12" height="18" rx="2" stroke="currentColor" strokeWidth="1.2" />
-                    <path d="M9 7 L15 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
+    {/* Right side buttons */}
+    <div className="flex items-center justify-end  ml-5 gap-0 sm:gap-1 md:gap-2">
+      <div className="md:hidden text-white text-xs font-medium bg-black/50 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[10px] sm:text-xs">
+        {formatTime(currentTime)}
+      </div>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={handleToggleFullscreen}
+        className="text-white hover:bg-white/20 transition-all duration-300 hover:scale-110 rounded-full p-0.5 sm:p-0 md:p-2"
+        title="Fullscreen (F)"
+      >
+        <Maximize className="h-3 w-3 sm:h-4 sm:w-4 md:h-5 md:w-5" />
+      </Button>
+
+      {/* Mobile landscape */}
+      <button
+        className="md:hidden inline-flex items-center justify-center p-0.5 sm:p-1 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all duration-300 hover:scale-110"
+        onClick={() => {
+          if (!document.fullscreenElement) {
+            videoContainerRef.current?.requestFullscreen().catch(() => {});
+          }
+          try {
+            (screen as any).orientation?.lock?.("landscape");
+          } catch {}
+        }}
+        title="Mobile landscape"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-hidden
+        >
+          <rect
+            x="6"
+            y="3"
+            width="12"
+            height="18"
+            rx="2"
+            stroke="currentColor"
+            strokeWidth="1.2"
+          />
+          <path
+            d="M9 7 L15 7"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
+    </div>
+  </div>
+</div>
 
           {currentVideoType === "screen" && isHost && (
             <div className="absolute top-4 right-4">
@@ -1964,20 +2148,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
             playVoiceMessage={playVoiceMessage}
             pauseVoiceMessage={pauseVoiceMessage}
             playingVoiceMessages={playingVoiceMessages}
-            onVideoVolumeChange={(vol) => {
-              setVolume(vol);
-              if (videoRef.current) {
-                videoRef.current.volume = vol;
-              }
-              if (isHost) {
-                webrtcManager.setLocalVolume(vol);
-              }
-            }}
+            onVideoVolumeChange={handleVideoVolumeChange}
             currentVideoVolume={volume}
             socketManager={socketManager}
             webrtcManager={webrtcManager}
             unreadCount={unreadCount}
-            onMarkAsRead={() => setUnreadCount(0)}
+            onMarkAsRead={handleMarkAsRead}
             messageInputRef={messageInputRef}
             chatContainerRef={chatContainerRef}
           />
@@ -1985,132 +2161,132 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         </div>
       </div>
 
-    
 
-  
-  {
-    showInviteModal && (
-      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-300">
-        <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-6 w-full max-w-md mx-4 border border-purple-500/20 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">Invite Friends</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowInviteModal(false)}
-              className="text-gray-400 hover:text-white hover:bg-purple-600/20 transition-all duration-300 rounded-full"
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
 
-          {/* Room Code Section */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-purple-200 mb-2 flex items-center space-x-2">
-              <Users className="h-4 w-4 text-purple-400" />
-              <span>Room Code</span>
-            </label>
-            <div className="flex items-center space-x-2">
-              <Input
-                value={inviteRoomCode}
-                readOnly
-                className="bg-gradient-to-r from-gray-700/50 to-gray-800/50 border-purple-500/30 text-white text-center text-lg font-mono tracking-wider flex-1 backdrop-blur-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
-              />
-              <Button
-                onClick={() => copyToClipboard(inviteRoomCode)}
-                variant="outline"
-                size="sm"
-                className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
-              >
-                <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
-                Copy
-              </Button>
+
+      {
+        showInviteModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-300">
+            <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-xl p-6 w-full max-w-md mx-4 border border-purple-500/20 shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-xl font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">Invite Friends</h3>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowInviteModal(false)}
+                  className="text-gray-400 hover:text-white hover:bg-purple-600/20 transition-all duration-300 rounded-full"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+
+              {/* Room Code Section */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-purple-200 mb-2 flex items-center space-x-2">
+                  <Users className="h-4 w-4 text-purple-400" />
+                  <span>Room Code</span>
+                </label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    value={inviteRoomCode}
+                    readOnly
+                    className="bg-gradient-to-r from-gray-700/50 to-gray-800/50 border-purple-500/30 text-white text-center text-lg font-mono tracking-wider flex-1 backdrop-blur-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
+                  />
+                  <Button
+                    onClick={() => copyToClipboard(inviteRoomCode)}
+                    variant="outline"
+                    size="sm"
+                    className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
+                  >
+                    <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
+                    Copy
+                  </Button>
+                </div>
+              </div>
+
+              {/* Full Link Section */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center space-x-2">
+                  <ExternalLink className="h-4 w-4 text-purple-400" />
+                  <span>Invite Link</span>
+                </label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    value={inviteLink}
+                    readOnly
+                    className="bg-gradient-to-r from-gray-700 to-gray-800 border-purple-500/30 text-white flex-1 text-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
+                  />
+                  <Button
+                    onClick={() => copyToClipboard(inviteLink)}
+                    variant="outline"
+                    size="sm"
+                    className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
+                  >
+                    <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
+                    Copy
+                  </Button>
+                </div>
+              </div>
+
+              {/* Social Share Buttons */}
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 mb-4">
+                  <Share2 className="h-4 w-4 text-purple-400" />
+                  <p className="text-sm font-medium text-gray-300">Share on social media</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    onClick={shareOnWhatsApp}
+                    className="group relative overflow-hidden bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-green-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <div className="relative flex items-center justify-center space-x-2">
+                      <MessageCircle className="h-4 w-4" />
+                      <span className="font-medium">WhatsApp</span>
+                    </div>
+                  </Button>
+
+                  <Button
+                    onClick={shareOnTelegram}
+                    className="group relative overflow-hidden bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <div className="relative flex items-center justify-center space-x-2">
+                      <Send className="h-4 w-4" />
+                      <span className="font-medium">Telegram</span>
+                    </div>
+                  </Button>
+
+                  <Button
+                    onClick={shareOnDiscord}
+                    className="group relative overflow-hidden bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-400/20 to-purple-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <div className="relative flex items-center justify-center space-x-2">
+                      <Copy className="h-4 w-4" />
+                      <span className="font-medium">Discord</span>
+                    </div>
+                  </Button>
+
+                  <Button
+                    onClick={shareOnTwitter}
+                    className="group relative overflow-hidden bg-gradient-to-r from-sky-600 to-cyan-700 hover:from-sky-500 hover:to-cyan-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-sky-500/25"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-sky-400/20 to-cyan-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    <div className="relative flex items-center justify-center space-x-2">
+                      <ExternalLink className="h-4 w-4" />
+                      <span className="font-medium">Twitter</span>
+                    </div>
+                  </Button>
+                </div>
+
+
+              </div>
             </div>
           </div>
-
-          {/* Full Link Section */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center space-x-2">
-              <ExternalLink className="h-4 w-4 text-purple-400" />
-              <span>Invite Link</span>
-            </label>
-            <div className="flex items-center space-x-2">
-              <Input
-                value={inviteLink}
-                readOnly
-                className="bg-gradient-to-r from-gray-700 to-gray-800 border-purple-500/30 text-white flex-1 text-sm focus:border-purple-400 focus:ring-2 focus:ring-purple-500/20 transition-all duration-300"
-              />
-              <Button
-                onClick={() => copyToClipboard(inviteLink)}
-                variant="outline"
-                size="sm"
-                className="group bg-fuchsia-200 border-purple-500/30 active:scale-95 hover:bg-purple-600/20 hover:border-purple-400 transition-all duration-200 shadow-lg hover:shadow-purple-500/25"
-              >
-                <Copy className="mr-1 h-3 w-3 group-hover:animate-pulse" />
-                Copy
-              </Button>
-            </div>
-          </div>
-
-          {/* Social Share Buttons */}
-          <div className="space-y-4">
-            <div className="flex items-center space-x-2 mb-4">
-              <Share2 className="h-4 w-4 text-purple-400" />
-              <p className="text-sm font-medium text-gray-300">Share on social media</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Button
-                onClick={shareOnWhatsApp}
-                className="group relative overflow-hidden bg-gradient-to-r from-green-600 to-green-700 hover:from-green-500 hover:to-green-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-green-500/25"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-green-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="relative flex items-center justify-center space-x-2">
-                  <MessageCircle className="h-4 w-4" />
-                  <span className="font-medium">WhatsApp</span>
-                </div>
-              </Button>
-
-              <Button
-                onClick={shareOnTelegram}
-                className="group relative overflow-hidden bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-400/20 to-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="relative flex items-center justify-center space-x-2">
-                  <Send className="h-4 w-4" />
-                  <span className="font-medium">Telegram</span>
-                </div>
-              </Button>
-
-              <Button
-                onClick={shareOnDiscord}
-                className="group relative overflow-hidden bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-500 hover:to-purple-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-indigo-500/25"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-indigo-400/20 to-purple-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="relative flex items-center justify-center space-x-2">
-                  <Copy className="h-4 w-4" />
-                  <span className="font-medium">Discord</span>
-                </div>
-              </Button>
-
-              <Button
-                onClick={shareOnTwitter}
-                className="group relative overflow-hidden bg-gradient-to-r from-sky-600 to-cyan-700 hover:from-sky-500 hover:to-cyan-600 text-white border-0 transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-sky-500/25"
-              >
-                <div className="absolute inset-0 bg-gradient-to-r from-sky-400/20 to-cyan-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="relative flex items-center justify-center space-x-2">
-                  <ExternalLink className="h-4 w-4" />
-                  <span className="font-medium">Twitter</span>
-                </div>
-              </Button>
-            </div>
-
-
-          </div>
-        </div>
-      </div>
-    )
-  }
-    </div >
+        )
+      }
+    </div>
   );
 }
