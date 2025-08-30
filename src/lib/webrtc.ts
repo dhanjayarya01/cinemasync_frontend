@@ -55,6 +55,17 @@ class WebRTCManager {
   setHostStatus(isHost: boolean) {
     this.isHost = isHost;
     this.ensureSocketListeners();
+    
+    // If we just became the host, try to establish connections with existing peers
+    if (isHost && this.peers.size > 0) {
+      setTimeout(() => {
+        this.peers.forEach((peer, peerId) => {
+          if (!peer.isConnected) {
+            this.createOfferWithRetries(peerId, 4, 800).catch(() => {});
+          }
+        });
+      }, 1000);
+    }
   }
 
   setVideoElement(videoElement: HTMLVideoElement | null) {
@@ -400,6 +411,12 @@ class WebRTCManager {
       setTimeout(() => {
         this.createOfferWithRetries(peerId, 4, 800).catch(() => {});
       }, 1000);
+    } else {
+      // If we're not the host, wait a bit and then try to establish connection
+      // This handles the case where non-host joins before host
+      setTimeout(() => {
+        this.initializePeerConnection(peerId, false).catch(() => {});
+      }, 1500);
     }
   }
 
@@ -919,6 +936,16 @@ class WebRTCManager {
   getScreenStream() { return this.screenStream; }
   isHostUser() { return this.isHost; }
   getConnectedPeersCount() { return Array.from(this.peers.values()).filter(peer => peer.isConnected).length; }
+  
+  getConnectedPeers() { 
+    return Array.from(this.peers.entries())
+      .filter(([_, peer]) => peer.isConnected)
+      .map(([peerId, _]) => peerId);
+  }
+  
+  async createOfferWithRetriesPublic(peerId: string, attempts = 3, delayMs = 1000) {
+    return this.createOfferWithRetries(peerId, attempts, delayMs);
+  }
   getConnectionStatus() {
     return {
       isHost: this.isHost,

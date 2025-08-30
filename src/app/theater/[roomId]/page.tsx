@@ -646,6 +646,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   useEffect(() => {
     let mounted = true;
     let authInFlight = true;
+    let connectionCheckInterval: NodeJS.Timeout | null = null;
 
 
 
@@ -686,11 +687,25 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           setRoomInfo(room);
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
-          webrtcManager.setHostStatus(currentUser.id === room.host?.id);
+          
+          const wasHost = webrtcManager.isHostUser();
+          const isNowHost = currentUser.id === room.host?.id;
+          
+          webrtcManager.setHostStatus(isNowHost);
           webrtcManager.ensureSocketListeners();
-          if (currentUser.id === room.host?.id) {
+          
+          if (isNowHost) {
             webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+          } else if (wasHost && !isNowHost) {
+            // If we were host but are no longer, try to establish connections with the new host
+            const newHostId = room.host?.id;
+            if (newHostId) {
+              setTimeout(() => {
+                webrtcManager.initializePeerConnection(newHostId, false).catch(() => {});
+              }, 1000);
+            }
           }
+          
           setIsLoading(false);
         });
 
@@ -700,6 +715,22 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           setParticipants(unique);
           if (webrtcManager.isHostUser()) webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
         });
+
+        // Periodic connection check for WebRTC peers
+        connectionCheckInterval = setInterval(() => {
+          if (!mounted) return;
+          
+          // If we're the host, check for unconnected peers and retry connections
+          if (webrtcManager.isHostUser()) {
+            const connectedPeers = webrtcManager.getConnectedPeers();
+            const allPeerIds = participants.map(p => p.user.id).filter(id => id !== currentUser.id);
+            const unconnectedPeers = allPeerIds.filter(id => !connectedPeers.includes(id));
+            
+            unconnectedPeers.forEach(peerId => {
+              webrtcManager.createOfferWithRetriesPublic(peerId, 2, 1000).catch(() => {});
+            });
+          }
+        }, 10000); // Check every 10 seconds
 
         socketManager.onMessage((msg) => {
           try {
@@ -923,6 +954,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       }
 
       setYoutubeContainerKey(0);
+
+      // Clear the connection check interval
+      if (connectionCheckInterval) {
+        clearInterval(connectionCheckInterval);
+      }
 
       socketManager.leaveRoom();
       webrtcManager.cleanup();
