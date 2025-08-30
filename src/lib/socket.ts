@@ -92,6 +92,7 @@ class SocketManager {
 
   private videoStateSyncCallbacks: ((data: any) => void)[] = []
   private hostVideoStateRequestCallbacks: (() => void)[] = []
+  private roomSyncCallbacks: ((data: any) => void)[] = []
 
   private pendingOffers: { from: string; offer: any }[] = []
   private pendingAnswers: { from: string; answer: any }[] = []
@@ -128,6 +129,19 @@ class SocketManager {
     this.socket.on('disconnect', () => {
       this.isConnected = false
       this.isAuthenticated = false
+    })
+
+    this.socket.on('reconnect', () => {
+      this.isConnected = true
+      if (!this.isAuthenticated) {
+        this.authenticate()
+      }
+      // If we were in a room, try to rejoin
+      if (this.roomId) {
+        setTimeout(() => {
+          this.joinRoom(this.roomId!).catch(() => {})
+        }, 1000)
+      }
     })
 
     this.socket.on('connect_error', (err) => {
@@ -209,6 +223,10 @@ class SocketManager {
 
     this.socket.on('host-video-state-request', () => {
       this.hostVideoStateRequestCallbacks.forEach(cb => cb())
+    })
+
+    this.socket.on('room-sync', (data) => {
+      this.roomSyncCallbacks.forEach(cb => cb(data))
     })
 
     this.socket.on('voice-message', (data) => {
@@ -526,6 +544,19 @@ class SocketManager {
 
   onHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks.push(cb); return () => { this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(c => c !== cb) } }
   offHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(c => c !== cb) }
+
+  onRoomSync(cb: (data: any) => void) { this.roomSyncCallbacks.push(cb); return () => { this.roomSyncCallbacks = this.roomSyncCallbacks.filter(c => c !== cb) } }
+  offRoomSync(cb: (data: any) => void) { this.roomSyncCallbacks = this.roomSyncCallbacks.filter(c => c !== cb) }
+
+  requestRoomSync(roomId: string) {
+    if (!this.socket || !this.roomId) return
+    this.socket.emit('request-room-sync', { roomId })
+  }
+
+  forceRoomSync(roomId: string) {
+    if (!this.socket || !this.roomId) return
+    this.socket.emit('force-room-sync', { roomId })
+  }
 
   disconnect() {
     if (this.socket) {
