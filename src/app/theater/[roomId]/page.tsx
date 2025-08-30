@@ -2169,7 +2169,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       </div>
     </div>
 
-    {/* Right side buttons */}
+    
     <div className="flex items-center justify-end  ml-5 gap-0 sm:gap-1 md:gap-2">
       <div className="md:hidden text-white text-xs font-medium bg-black/50 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded text-[10px] sm:text-xs">
         {formatTime(currentTime)}
