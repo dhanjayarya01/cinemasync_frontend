@@ -1655,12 +1655,12 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           font-size: 16px !important;
         }
         
-        /* Video container optimization */
-        video {
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: cover !important;
-        }
+                 /* Video container optimization */
+         video {
+           width: 100% !important;
+           height: 100% !important;
+           object-fit: contain !important;
+         }
         
         .theater-container {
           height: calc(var(--vh, 1vh) * 100) !important;
@@ -1682,15 +1682,15 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         background: #000;
       }
       
-      .video-container video,
-      .video-container iframe {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
+             .video-container video,
+       .video-container iframe {
+         position: absolute;
+         top: 0;
+         left: 0;
+         width: 100%;
+         height: 100%;
+         object-fit: contain;
+       }
     `;
 
     document.head.appendChild(style);
@@ -1964,13 +1964,13 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                 />
               </div>
             ) : (
-              <video
-                ref={bindVideo as any}
-                className="w-full h-full object-cover bg-black"
-                autoPlay
-                playsInline
-                style={{ objectFit: 'cover' }}
-              />
+                             <video
+                 ref={bindVideo as any}
+                 className="w-full h-full object-contain bg-black"
+                 autoPlay
+                 playsInline
+                 style={{ objectFit: 'contain' }}
+               />
             )}
           </div>
 
