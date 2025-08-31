@@ -641,325 +641,393 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       }
     });
 
- useEffect(() => {
-  let mounted = true;
-  let authInFlight = true;
-  let connectionCheckInterval: NodeJS.Timeout | null = null;
+  useEffect(() => {
+    let mounted = true;
+    let authInFlight = true;
+    let connectionCheckInterval: NodeJS.Timeout | null = null;
 
-  const waitForSocketAuth = (timeout = 8000) => {
-    return new Promise<void>((resolve) => {
+
+
+    const init = async () => {
       try {
-        if ((socketManager as any).isAuthenticated?.()) {
-          resolve();
+        const resolved = await params;
+        const roomId = resolved.roomId;
+
+        const currentUser = getCurrentUser();
+        const token = getToken();
+        if (!currentUser || !token) {
+          // Store the room ID to redirect after login
+          localStorage.setItem('redirectAfterLogin', `/theater/${roomId}`);
+          router.push("/auth");
           return;
         }
-      } catch {}
+        setUser(currentUser);
 
-      let settled = false;
-      const t = setTimeout(() => {
-        if (!settled) { settled = true; resolve(); }
-      }, timeout);
-
-      const offAuth = (socketManager as any).onAuthenticated?.(() => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(t);
-        offAuth?.();
-        resolve();
-      }) ?? (() => {});
-
-      const offConn = (socketManager as any).onConnect?.(() => {
-        if ((socketManager as any).isAuthenticated?.()) {
-          if (settled) return;
-          settled = true;
-          clearTimeout(t);
-          offAuth?.();
-          offConn?.();
-          resolve();
+        try {
+          socketManager.connect?.({ auth: { token } });
+        } catch {
+          socketManager.connect();
         }
-      }) ?? (() => {});
-    });
-  };
 
-  const waitForRoomInfo = (roomId: string, timeout = 8000) => {
-    return new Promise<any>((resolve) => {
-      let settled = false;
-      const t = setTimeout(() => {
-        if (!settled) { settled = true; resolve(null); }
-      }, timeout);
-
-      const off = (socketManager as any).onRoomInfo?.((room: any) => {
-        if (!room || room.id !== roomId) return;
-        if (settled) return;
-        settled = true;
-        clearTimeout(t);
-        off?.();
-        resolve(room);
-      }) ?? (() => {});
-    });
-  };
-
-  const init = async () => {
-    let offRoomInfo: (() => void) | undefined;
-    let offParticipants: (() => void) | undefined;
-    let offError: (() => void) | undefined;
-    let offMessage: (() => void) | undefined;
-    let offVideoControl: (() => void) | undefined;
-    let offVideoMetadata: (() => void) | undefined;
-    let offVideoStateSync: (() => void) | undefined;
-
-    try {
-      const resolved = await params;
-      const roomId = resolved.roomId;
-      const currentUser = getCurrentUser();
-      const token = getToken();
-      if (!currentUser || !token) {
-        localStorage.setItem('redirectAfterLogin', `/theater/${roomId}`);
-        router.push("/auth");
-        return;
-      }
-      setUser(currentUser);
-
-      // register listeners early
-      offRoomInfo = (socketManager as any).onRoomInfo?.((room: any) => {
-        if (!mounted) return;
-        setRoomInfo(room);
-        const unique = room.participants.filter((p: any, i: number, arr: any[]) => i === arr.findIndex(x => x.user.id === p.user.id));
-        setParticipants(unique);
-
-        const isNowHost = currentUser.id === room.host?.id;
-        webrtcManager.setHostStatus(isNowHost);
         webrtcManager.ensureSocketListeners();
 
-        if (isNowHost) {
-          webrtcManager.ensureConnectionsTo(unique.map((p: any) => p.user.id), currentUser.id);
-        } else {
-          const hostId = room.host?.id;
-          if (hostId && hostId !== currentUser.id) {
-            for (let i = 0; i < 3; i++) {
-              setTimeout(() => {
-                if (mounted) webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
-              }, 1000 + (i * 2000));
+        socketManager.onError((err) => {
+          if (!mounted) return;
+          if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
+          setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
+        });
+
+        await waitForSocketAuth(token);
+        authInFlight = false;
+
+        socketManager.onRoomInfo((room) => {
+          if (!mounted) return;
+          setRoomInfo(room);
+          const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
+          setParticipants(unique);
+          
+          const wasHost = webrtcManager.isHostUser();
+          const isNowHost = currentUser.id === room.host?.id;
+          
+          webrtcManager.setHostStatus(isNowHost);
+          webrtcManager.ensureSocketListeners();
+          
+          if (isNowHost) {
+            webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+          } else {
+            // For non-host users, establish connection with the host
+            const hostId = room.host?.id;
+            if (hostId && hostId !== currentUser.id) {
+              // Retry connection multiple times for new users
+              for (let i = 0; i < 3; i++) {
+                setTimeout(() => {
+                  if (mounted) {
+                    webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+                  }
+                }, 1000 + (i * 2000)); // 1s, 3s, 5s delays
+              }
             }
           }
-        }
-        setIsLoading(false);
-      }) ?? undefined;
+          
+          setIsLoading(false);
+        });
 
-      offParticipants = (socketManager as any).onParticipantsChange?.((parts: any[]) => {
-        if (!mounted) return;
-        const unique = parts.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
-        setParticipants(unique);
-
-        if (webrtcManager.isHostUser()) {
-          webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
-        } else {
-          const hostId = (roomInfo as any)?.host?.id;
-          if (hostId && hostId !== currentUser.id) {
-            const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
-            if (!isConnected) {
-              webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+        socketManager.onParticipantsChange((parts) => {
+          if (!mounted) return;
+          const unique = parts.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
+          setParticipants(unique);
+          
+          if (webrtcManager.isHostUser()) {
+            // Host ensures connections to all participants
+            webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+          } else {
+            // Non-host users ensure connection with host
+            const hostId = roomInfo?.host?.id;
+            if (hostId && hostId !== currentUser.id) {
+              // Check if we need to establish connection with host
+              const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
+              if (!isConnected) {
+                webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+              }
             }
           }
-        }
-      }) ?? undefined;
+        });
 
-      offError = (socketManager as any).onError?.((err: any) => {
-        if (!mounted) return;
-        if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
-        setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
-      }) ?? undefined;
+        // Periodic connection check for WebRTC peers
+        connectionCheckInterval = setInterval(() => {
+          if (!mounted) return;
+          
+          // If we're the host, check for unconnected peers and retry connections
+          if (webrtcManager.isHostUser()) {
+            const connectedPeers = webrtcManager.getConnectedPeers();
+            const allPeerIds = participants.map(p => p.user.id).filter(id => id !== currentUser.id);
+            const unconnectedPeers = allPeerIds.filter(id => !connectedPeers.includes(id));
+            
+            unconnectedPeers.forEach(peerId => {
+              webrtcManager.createOfferWithRetriesPublic(peerId, 2, 1000).catch(() => {});
+            });
+          } else {
+            // For non-host users, ensure connection with host
+            const hostId = roomInfo?.host?.id;
+            if (hostId && hostId !== currentUser.id) {
+              const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
+              if (!isConnected) {
+                webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+              }
+            }
+          }
+        }, 5000); // Check every 5 seconds for better connection reliability
 
-      offMessage = (socketManager as any).onMessage?.((msg: any) => {
-        if (!mounted) return;
-        try {
-          if (msg.message) {
-            const parsed = JSON.parse(msg.message);
-            if (parsed?.type === "user-joined") {
-              if (webrtcManager.isHostUser()) {
-                const newUserId = msg.user?.id;
-                if (newUserId && newUserId !== currentUser.id) {
-                  setTimeout(() => {
-                    webrtcManager.ensureConnectionsTo([newUserId], currentUser.id);
-                  }, 1000);
-                }
-              } else {
-                const hostId = (roomInfo as any)?.host?.id;
-                if (hostId && hostId !== currentUser.id) {
-                  const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
-                  if (!isConnected) {
+        socketManager.onMessage((msg) => {
+          try {
+            if (msg.message) {
+              const parsed = JSON.parse(msg.message);
+              if (parsed?.type === "user-joined") {
+                // When a new user joins, ensure WebRTC connections
+                if (webrtcManager.isHostUser()) {
+                  // Host should connect to new user
+                  const newUserId = msg.user?.id;
+                  if (newUserId && newUserId !== currentUser.id) {
                     setTimeout(() => {
-                      webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+                      webrtcManager.ensureConnectionsTo([newUserId], currentUser.id);
                     }, 1000);
                   }
+                } else {
+                  // Non-host users should ensure connection with host
+                  const hostId = roomInfo?.host?.id;
+                  if (hostId && hostId !== currentUser.id) {
+                    const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
+                    if (!isConnected) {
+                      setTimeout(() => {
+                        webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+                      }, 1000);
+                    }
+                  }
                 }
-              }
-              return;
-            }
-
-            if (parsed?.type === "refresh-page") {
-              const isFromSelf = msg.user?.id === currentUser?.id;
-              if (!isFromSelf) {
-                window.location.reload();
                 return;
               }
+
+              if (parsed?.type === "refresh-page") {
+                const isFromSelf = msg.user?.id === user?.id;
+
+                if (!isFromSelf) {
+                  window.location.reload();
+                  return;
+                }
+              }
+            }
+          } catch (e) {
+          }
+          if (msg.type === "voice" && msg.audioUrl) {
+            if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
+          }
+          setMessages(prev => [...prev, msg]);
+          if (!isChatVisible && msg.user?.id !== user?.id) setUnreadCount(c => c + 1);
+        });
+
+        socketManager.onVideoControl((data) => handleVideoControl(data));
+
+        socketManager.onVideoMetadata((metadata) => {
+          if (!mounted) return;
+
+          const shouldProcessMetadata = metadata.type === "youtube" || !isHost;
+
+          if (shouldProcessMetadata) {
+            if (metadata.type === "youtube") {
+              const id = extractYouTubeId(metadata.url || "");
+              if (id) {
+                setYoutubeVideoId(id);
+                setYoutubeUrl(metadata.url || "");
+                setCurrentVideoType("youtube");
+                setYoutubeError(null);
+
+                createYouTubePlayer(id, 0, false)
+                  .then((player) => {
+                    if (player) {
+                      setTimeout(() => socketManager.sendVideoStateRequest(), 1000);
+                      setTimeout(() => socketManager.sendVideoStateRequest(), 2000);
+                    }
+                  })
+                  .catch((e) => {
+                    setYoutubeError("Failed to load YouTube video");
+                  });
+              }
+            } else if (metadata.type === "screen") {
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
+              setYoutubeError(null);
+              setCurrentVideoType("screen");
+            } else if (metadata.type === "file" || metadata.type.startsWith("video/")) {
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
+              setYoutubeError(null);
+              setCurrentVideoType("file");
+            } else if (metadata.type === "stopped") {
+              const existingPlayer = getYTPlayer();
+              if (existingPlayer) {
+                try {
+                  existingPlayer.destroy();
+                  setYTPlayer(null);
+                } catch (e) {
+                }
+              }
+              recreateYouTubeContainer();
+              setYtPlayerReady(false);
+              setCurrentVideoType(null);
+              setYoutubeVideoId(null);
+              setYoutubeUrl("");
+              setYoutubeError(null);
+            }
+
+            if (videoRef.current && metadata.type !== "youtube") {
+              try { webrtcManager.setVideoElement(videoRef.current); } catch { }
+            }
+
+            if (metadata.type !== "youtube") {
+              for (let i = 0; i < 4; i++) {
+                setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
+              }
             }
           }
-        } catch (e) {}
-        if (msg.type === "voice" && msg.audioUrl) {
-          if (messages.find(m => m.audioUrl === msg.audioUrl)) return;
-        }
-        setMessages(prev => [...prev, msg]);
-        if (!isChatVisible && msg.user?.id !== currentUser?.id) setUnreadCount(c => c + 1);
-      }) ?? undefined;
+        });
 
-      offVideoControl = (socketManager as any).onVideoControl?.((data: any) => handleVideoControl(data)) ?? undefined;
-      offVideoMetadata = (socketManager as any).onVideoMetadata?.((metadata: any) => {
-        if (!mounted) return;
-        const shouldProcessMetadata = metadata.type === "youtube" || !(webrtcManager.isHostUser());
-        if (!shouldProcessMetadata) return;
+        socketManager.onVideoStateSync((data) => {
+          if (!mounted) return;
+          const vs = data.videoState || data;
+          const metadata = vs.metadata || data.metadata;
+          const playback = vs.playbackState || data.playbackState;
 
-        if (metadata.type === "youtube") {
-          const id = extractYouTubeId(metadata.url || "");
-          if (id) {
-            setYoutubeVideoId(id);
-            setYoutubeUrl(metadata.url || "");
-            setCurrentVideoType("youtube");
-            setYoutubeError(null);
-            createYouTubePlayer(id, 0, false)
-              .then((player) => {
-                if (player) {
-                  setTimeout(() => socketManager.sendVideoStateRequest(), 1000);
-                  setTimeout(() => socketManager.sendVideoStateRequest(), 2000);
+          const isFromOtherUser = data.from && data.from !== user?.id;
+          const shouldProcessSync = !isHost && isFromOtherUser && metadata && playback && data.from;
+
+          if (shouldProcessSync) {
+            if (metadata.type === "youtube") {
+              setCurrentTime(playback.currentTime || 0);
+              setIsPlaying(playback.isPlaying || false);
+              setVolume(playback.volume || 1);
+              setIsMuted(playback.isMuted || false);
+
+              const player = getYTPlayer();
+
+              if (player && ytPlayerReady) {
+                try {
+                  if (playback.volume !== undefined) {
+                    player.setVolume((playback.volume || 1) * 100);
+                  }
+
+                  if (playback.isMuted) {
+                    player.mute();
+                  } else {
+                    player.unMute();
+                  }
+
+                  if (playback.isPlaying) {
+                    player.seekTo(playback.currentTime || 0, true);
+                    player.playVideo();
+                    setIsPlaying(true);
+                  } else {
+                    player.seekTo(playback.currentTime || 0, true);
+                    player.pauseVideo();
+                    setIsPlaying(false);
+                  }
+                } catch (e) {
                 }
-              })
-              .catch(() => setYoutubeError("Failed to load YouTube video"));
+              } else {
+                setTimeout(() => {
+                  const retryPlayer = getYTPlayer();
+                  if (retryPlayer) {
+                    try {
+                      if (playback.isPlaying) {
+                        retryPlayer.seekTo(playback.currentTime || 0, true);
+                        retryPlayer.playVideo();
+                        setIsPlaying(true);
+                      } else {
+                        retryPlayer.seekTo(playback.currentTime || 0, true);
+                        retryPlayer.pauseVideo();
+                        setIsPlaying(false);
+                      }
+                    } catch (e) {
+                    }
+                  }
+                }, 1000);
+              }
+            } else {
+              setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
+              if (videoRef.current) webrtcManager.setVideoElement(videoRef.current);
+              if (playback?.isPlaying) {
+                setTimeout(() => {
+                  tryPlayVideo().catch(() => {
+                    setShowResumeButton(true);
+                  });
+                }, 300);
+              }
+            }
           }
-        } else {
-          const existingPlayer = getYTPlayer();
-          if (existingPlayer) {
-            try { existingPlayer.destroy(); setYTPlayer(null); } catch {}
-          }
-          recreateYouTubeContainer();
-          setYtPlayerReady(false);
-          setYoutubeVideoId(null);
-          setYoutubeUrl("");
-          setYoutubeError(null);
-          setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
-          if (videoRef.current) try { webrtcManager.setVideoElement(videoRef.current); } catch {}
-          for (let i = 0; i < 4; i++) setTimeout(() => socketManager.sendVideoStateRequest(), 300 * i + 200);
-        }
-      }) ?? undefined;
+        });
 
-      offVideoStateSync = (socketManager as any).onVideoStateSync?.((data: any) => {
-        if (!mounted) return;
-        const vs = data.videoState || data;
-        const metadata = vs.metadata || data.metadata;
-        const playback = vs.playbackState || data.playbackState;
-        const isFromOtherUser = data.from && data.from !== currentUser?.id;
-        const shouldProcessSync = !webrtcManager.isHostUser() && isFromOtherUser && metadata && playback && data.from;
-        if (!shouldProcessSync) return;
+        socketManager.joinRoom(roomId);
 
-        if (metadata.type === "youtube") {
-          setCurrentTime(playback.currentTime || 0);
-          setIsPlaying(playback.isPlaying || false);
-          setVolume(playback.volume || 1);
-          setIsMuted(playback.isMuted || false);
-
-          const player = getYTPlayer();
-          if (player && ytPlayerReady) {
-            try {
-              if (playback.volume !== undefined) player.setVolume((playback.volume || 1) * 100);
-              if (playback.isMuted) player.mute(); else player.unMute();
-              if (playback.isPlaying) { player.seekTo(playback.currentTime || 0, true); player.playVideo(); setIsPlaying(true); }
-              else { player.seekTo(playback.currentTime || 0, true); player.pauseVideo(); setIsPlaying(false); }
-            } catch {}
-          } else {
-            setTimeout(() => {
-              const retryPlayer = getYTPlayer();
-              if (!retryPlayer) return;
-              try {
-                if (playback.isPlaying) { retryPlayer.seekTo(playback.currentTime || 0, true); retryPlayer.playVideo(); setIsPlaying(true); }
-                else { retryPlayer.seekTo(playback.currentTime || 0, true); retryPlayer.pauseVideo(); setIsPlaying(false); }
-              } catch {}
-            }, 1000);
-          }
-        } else {
-          setCurrentVideoType(metadata.type === "screen" ? "screen" : "file");
-          if (videoRef.current) webrtcManager.setVideoElement(videoRef.current);
-          if (playback?.isPlaying) setTimeout(() => tryPlayVideo().catch(() => setShowResumeButton(true)), 300);
-        }
-      }) ?? undefined;
-
-      // connect and wait for auth
-      try { socketManager.connect?.({ auth: { token } }); } catch { socketManager.connect?.(); }
-      await waitForSocketAuth(token);
-      authInFlight = false;
-
-      // join and wait for roomInfo so we know the host is in the socket room
-      try { socketManager.joinRoom(roomId); } catch {}
-      const roomFromSocket = await waitForRoomInfo(roomId, 8000);
-      if (roomFromSocket) {
-        // already handled by onRoomInfo listener
-      } else {
-        // fallback: fetch once from API
         const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await resp.json();
         if (data.success) {
           setRoomInfo(data.room);
           setParticipants(data.room.participants || []);
+
           if (currentUser.id !== data.room.host?.id) {
+            // For non-host users, establish WebRTC connection with host
             const hostId = data.room.host?.id;
             if (hostId) {
+              // Retry connection multiple times for new users
               for (let i = 0; i < 4; i++) {
-                setTimeout(() => { if (mounted) webrtcManager.initializePeerConnection(hostId, false).catch(() => {}); }, 1000 + (i * 2000));
+                setTimeout(() => {
+                  if (mounted) {
+                    webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+                  }
+                }, 1000 + (i * 2000)); // 1s, 3s, 5s delays
               }
             }
+            
+            // Request video state multiple times
             setTimeout(() => {
               for (let i = 0; i < 5; i++) {
                 setTimeout(() => socketManager.sendVideoStateRequest(), 500 * i);
               }
             }, 1000);
           }
-        } else {
-          if (mounted) { setError("Failed to fetch room"); setIsLoading(false); }
+        }
+      } catch (e) {
+        if (mounted) {
+          setError("Failed to join room");
+          setIsLoading(false);
+        }
+      }
+    };
+
+    init();
+    return () => {
+      mounted = false;
+
+      const existingPlayer = getYTPlayer();
+      if (existingPlayer) {
+        try {
+          existingPlayer.destroy();
+          setYTPlayer(null);
+        } catch (e) {
         }
       }
 
-      connectionCheckInterval = setInterval(() => {
-        if (!mounted) return;
-        if (webrtcManager.isHostUser()) {
-          const connectedPeers = webrtcManager.getConnectedPeers();
-          const allPeerIds = (participants || []).map((p: any) => p.user.id).filter((id: string) => id !== currentUser.id);
-          const unconnectedPeers = allPeerIds.filter((id: string) => !connectedPeers.includes(id));
-          unconnectedPeers.forEach(peerId => webrtcManager.createOfferWithRetriesPublic(peerId, 2, 1000).catch(() => {}));
-        } else {
-          const hostId = (roomInfo as any)?.host?.id;
-          if (hostId && hostId !== currentUser.id) {
-            const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
-            if (!isConnected) webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
-          }
-        }
-      }, 5000);
-
-    } catch (e) {
-      if (mounted) { setError("Failed to join room"); setIsLoading(false); }
-    }
-
-    return () => {
-      mounted = false;
-      try { const player = getYTPlayer(); if (player) { player.destroy(); setYTPlayer(null); } } catch {}
       setYoutubeContainerKey(0);
-      if (connectionCheckInterval) clearInterval(connectionCheckInterval);
-      try { socketManager.leaveRoom(); } catch {}
-      try { webrtcManager.cleanup(); } catch {}
-      try { offRoomInfo?.(); offParticipants?.(); offError?.(); offMessage?.(); offVideoControl?.(); offVideoMetadata?.(); offVideoStateSync?.(); } catch {}
-    };
-  };
 
-  init();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, [params, router]);
+      // Clear the connection check interval
+      if (connectionCheckInterval) {
+        clearInterval(connectionCheckInterval);
+      }
+
+      socketManager.leaveRoom();
+      webrtcManager.cleanup();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params, router]);
 
   const handleVideoControl = (data: any) => {
     if (!data) return;

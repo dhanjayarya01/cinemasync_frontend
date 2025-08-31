@@ -79,6 +79,7 @@ export default function RoomsPage() {
     fetchRooms()
   }, [router])
 
+  
   useEffect(() => {
     const originalOverflow = typeof window !== 'undefined' ? document.body.style.overflow : ''
     if (isCreateModalOpen) {
@@ -133,123 +134,31 @@ export default function RoomsPage() {
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     })
 
-  const waitForSocketAuth = (timeout = 6000) => {
-    return new Promise<void>((resolve) => {
-      try {
-        if ((window as any).socketManager?.isAuthenticated?.()) {
-          resolve()
-          return
-        }
-      } catch {}
-
-      let settled = false
-      const t = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          resolve()
-        }
-      }, timeout)
-
-      const offAuth = (window as any).socketManager?.onAuthenticated?.(() => {
-        if (settled) return
-        settled = true
-        clearTimeout(t)
-        offAuth?.()
-        resolve()
-      }) ?? (() => {})
-
-      const offConn = (window as any).socketManager?.onConnect?.(() => {
-        if ((window as any).socketManager?.isAuthenticated?.()) {
-          if (settled) return
-          settled = true
-          clearTimeout(t)
-          offAuth?.()
-          offConn?.()
-          resolve()
-        }
-      }) ?? (() => {})
-    })
-  }
-
-  const waitForRoomInfo = (roomId: string, timeout = 6000) => {
-    return new Promise<any>((resolve) => {
-      let settled = false
-      const t = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          resolve(null)
-        }
-      }, timeout)
-
-      const off = (window as any).socketManager?.onRoomInfo?.((room: any) => {
-        if (!room || room.id !== roomId) return
-        if (settled) return
-        settled = true
-        clearTimeout(t)
-        off?.()
-        resolve(room)
-      }) ?? (() => {})
-    })
-  }
-
-  const createAndJoinRoomHelper = async (payload: any) => {
-    const token = getToken()
-    if (!token) {
-      localStorage.setItem('postLoginIntent', JSON.stringify({ action: 'create-and-join', payload }))
-      router.replace('/auth')
-      return null
-    }
-
-    const resp = await fetch(`${API_BASE_URL}/api/rooms`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(payload)
-    })
-    const data = await resp.json()
-    if (!data.success || !data.room?.id) throw new Error(data.error || 'Failed to create room')
-    const roomId = data.room.id
-
-    try {
-      try {
-        (window as any).socketManager?.connect?.({ auth: { token } })
-      } catch {
-        (window as any).socketManager?.connect?.()
-      }
-    } catch (e) {}
-
-    try {
-      (window as any).webrtcManager?.ensureSocketListeners?.()
-      (window as any).socketManager?.ensureListeners?.()
-    } catch (e) {}
-
-    await waitForSocketAuth(8000)
-
-    try {
-      (window as any).socketManager?.joinRoom?.(roomId)
-    } catch (e) {}
-
-    await waitForRoomInfo(roomId, 8000)
-
-    return roomId
-  }
-
   const handleCreateRoom = async () => {
     try {
       setIsLoading(true)
-      const payload = {
-        name: newRoom.name,
-        description: newRoom.description,
-        movieName: newRoom.movieName,
-        movieGenre: newRoom.movieGenre,
-        isPrivate: newRoom.isPrivate,
-        maxParticipants: newRoom.maxParticipants,
-        tags: newRoom.tags
-      }
-      const roomId = await createAndJoinRoomHelper(payload)
-      if (roomId) {
+      const token = getToken()
+
+      const response = await fetch(`${API_BASE_URL}/api/rooms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: newRoom.name,
+          description: newRoom.description,
+          movieName: newRoom.movieName,
+          movieGenre: newRoom.movieGenre,
+          isPrivate: newRoom.isPrivate,
+          maxParticipants: newRoom.maxParticipants,
+          tags: newRoom.tags
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
         setIsCreateModalOpen(false)
         setNewRoom({
           name: "",
@@ -260,11 +169,13 @@ export default function RoomsPage() {
           maxParticipants: 50,
           tags: []
         })
-        router.replace(`/theater/${roomId}`)
+        router.push(`/theater/${data.room.id}`)
+      } else {
+        alert(data.error || 'Failed to create room')
       }
     } catch (error) {
       console.error('Failed to create room:', error)
-      alert(error instanceof Error ? error.message : 'Failed to create room')
+      alert('Failed to create room')
     } finally {
       setIsLoading(false)
     }
@@ -273,29 +184,43 @@ export default function RoomsPage() {
   const handleSkipRoomCreate = async () => {
     try {
       setIsLoading(true)
+      const token = getToken()
+      
+      // Generate a default movie name
       const defaultMovies = [
-        "The Matrix", "Inception", "Interstellar", "The Dark Knight",
+        "The Matrix", "Inception", "Interstellar", "The Dark Knight", 
         "Pulp Fiction", "Fight Club", "Forrest Gump", "The Shawshank Redemption",
         "Goodfellas", "The Silence of the Lambs", "The Godfather", "Schindler's List"
       ]
       const randomMovie = defaultMovies[Math.floor(Math.random() * defaultMovies.length)]
-      const payload = {
-        name: `${user.name} room`,
-        description: "skipped room created",
-        movieName: randomMovie,
-        movieGenre: "action",
-        isPrivate: true,
-        maxParticipants: 50,
-        tags: []
-      }
 
-      const roomId = await createAndJoinRoomHelper(payload)
-      if (roomId) {
-        router.replace(`/theater/${roomId}`)
+      const response = await fetch(`${API_BASE_URL}/api/rooms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: `${user.name} room`,
+          description: "skipped room created",
+          movieName: randomMovie,
+          movieGenre: "action",
+          isPrivate: true,
+          maxParticipants: 50,
+          tags: []
+        })
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        router.push(`/theater/${data.room.id}`)
+      } else {
+        alert(data.error || 'Failed to create room')
       }
     } catch (error) {
       console.error('Failed to create room:', error)
-      alert(error instanceof Error ? error.message : 'Failed to create room')
+      alert('Failed to create room')
     } finally {
       setIsLoading(false)
     }
@@ -321,6 +246,7 @@ export default function RoomsPage() {
   }
 
   const handleRoomCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // Auto-uppercase the room code for better UX
     setRoomCode(e.target.value.toUpperCase())
   }
 
