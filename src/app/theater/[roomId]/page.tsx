@@ -663,11 +663,27 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
         setUser(currentUser);
 
-         try { socketManager.connect?.({ auth: { token } }); 
-         console.log('___Socket re-used existing connection threater page',currentUser);
-        } catch { socketManager.connect();
-          console.log('___Socket created new connection');
-         }
+        try {
+  socketManager.connect?.({ auth: { token } });
+  console.log('___Socket re-used existing connection threater page');
+} catch {
+  socketManager.connect();
+  console.log('___Socket created new connection');
+}
+
+// ensure the existing socket (if any) actually authenticates with the current token
+try {
+  socketManager.authenticateWithToken?.(token);
+  console.log('___Requested socket authenticateWithToken');
+} catch (err) {
+  // fallback: force a reconnect with token
+  try {
+    socketManager.disconnect?.();
+    socketManager.connect?.({ auth: { token } });
+    console.log('___Forced socket reconnect with token');
+  } catch (e) {}
+}
+
 
         webrtcManager.ensureSocketListeners();
 

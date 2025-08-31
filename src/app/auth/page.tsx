@@ -45,8 +45,6 @@ export default function AuthPage() {
 
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
-        
-        
         localStorage.removeItem('redirectAfterLogin')
         router.push(redirectPath)
       } else {

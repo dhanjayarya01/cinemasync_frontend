@@ -72,6 +72,7 @@ export interface VideoMetadata {
 type JoinRequest = { roomId: string; resolve?: (v?: any) => void; reject?: (e?: any) => void; attempts?: number }
 
 class SocketManager {
+  public authUserId: string | null = null
   private socket: Socket | null = null
   private isConnected = false
   private isAuthenticated = false
@@ -127,6 +128,7 @@ class SocketManager {
     this.socket.on('disconnect', () => {
       this.isConnected = false
       this.isAuthenticated = false
+      this.authUserId = null
     })
 
     this.socket.on('connect_error', (err) => {
@@ -135,6 +137,7 @@ class SocketManager {
 
     this.socket.on('authenticated', (data) => {
       this.isAuthenticated = true
+      try { this.authUserId = data?.user?.id ?? null } catch { this.authUserId = null }
       this.authenticatedCallbacks.forEach(cb => { try { cb(data) } catch (e) {} })
       if (this.pendingJoin) {
         const pj = this.pendingJoin
@@ -478,9 +481,20 @@ class SocketManager {
     this.isConnected = false
     this.isAuthenticated = false
     this.roomId = null
+    this.authUserId = null
   }
 
   isSocketConnected() { return this.isConnected }
+
+  isSocketAuthenticated() { return this.isAuthenticated }
+
+  getAuthenticatedUserId() { return this.authUserId }
+
+  reconnectWithToken(token?: string) {
+    try { this.disconnect() } catch (e) {}
+    if (token) this.connect({ auth: { token } })
+    else this.connect()
+  }
 
   onConnect(cb: () => void) { this.connectCallbacks.push(cb); return () => { this.connectCallbacks = this.connectCallbacks.filter(c => c !== cb) } }
   onAuthenticated(cb: (d: any) => void) { this.authenticatedCallbacks.push(cb); return () => { this.authenticatedCallbacks = this.authenticatedCallbacks.filter(c => c !== cb) } }
