@@ -670,7 +670,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   socketManager.connect();
   console.log('___Socket created new connection');
 }
-
+//checking if the user is connected with new token
 // ensure the existing socket (if any) actually authenticates with the current token
 try {
   socketManager.authenticateWithToken?.(token);
