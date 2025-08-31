@@ -727,7 +727,8 @@ try {
           
           setIsLoading(false);
         });
-
+    
+        console.log('room info recived ',roomInfo);
         socketManager.onParticipantsChange((parts) => {
           if (!mounted) return;
           const unique = parts.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
@@ -985,6 +986,7 @@ try {
 
         const resp = await fetch(`${API_BASE_URL}/api/rooms/${roomId}`, { headers: { Authorization: `Bearer ${token}` } });
         const data = await resp.json();
+        console.log("Join room response:", data);
         if (data.success) {
           setRoomInfo(data.room);
           setParticipants(data.room.participants || []);
