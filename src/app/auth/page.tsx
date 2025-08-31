@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Play, Shield, Lock, CheckCircle, Loader2 } from "lucide-react"
 import Link from "next/link"
+import { socketManager } from "@/lib/socket"
 import { useRouter } from "next/navigation"
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
 import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth"
@@ -43,7 +44,23 @@ export default function AuthPage() {
 
 
       const redirectPath = localStorage.getItem('redirectAfterLogin')
+      
+         try {
+
+           const TEMtoken = data.token;
+          console.log('token in auth 51_______ ', TEMtoken);
+           socketManager.connect?.({ auth: { TEMtoken } });
+           console.log('Socket connected with auth token ___ checking ', socketManager);
+         
+           
+          } catch (error) {
+            socketManager.connect();
+            
+         } 
       if (redirectPath) {
+        
+       
+        
         localStorage.removeItem('redirectAfterLogin')
         router.push(redirectPath)
       } else {

@@ -155,6 +155,7 @@ class SocketManager {
         this.pendingJoin = null
       }
     })
+    
 
     this.socket.on('user-joined', (data) => {
       if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants))
