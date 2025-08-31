@@ -92,7 +92,6 @@ class SocketManager {
 
   private videoStateSyncCallbacks: ((data: any) => void)[] = []
   private hostVideoStateRequestCallbacks: (() => void)[] = []
-  private roomSyncCallbacks: ((data: any) => void)[] = []
 
   private pendingOffers: { from: string; offer: any }[] = []
   private pendingAnswers: { from: string; answer: any }[] = []
@@ -112,10 +111,9 @@ class SocketManager {
       transports: ['websocket', 'polling'],
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 8000,
-      timeout: 10000,
+      reconnectionDelayMax: 5000,
       auth: options?.auth || (token ? { token } : undefined),
       forceNew: true
     })
@@ -129,19 +127,6 @@ class SocketManager {
     this.socket.on('disconnect', () => {
       this.isConnected = false
       this.isAuthenticated = false
-    })
-
-    this.socket.on('reconnect', () => {
-      this.isConnected = true
-      if (!this.isAuthenticated) {
-        this.authenticate()
-      }
-      // If we were in a room, try to rejoin
-      if (this.roomId) {
-        setTimeout(() => {
-          this.joinRoom(this.roomId!).catch(() => {})
-        }, 1000)
-      }
     })
 
     this.socket.on('connect_error', (err) => {
@@ -189,10 +174,6 @@ class SocketManager {
       if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants))
     })
 
-    this.socket.on('participants-updated', (data) => {
-      if (data.participants) this.participantCallbacks.forEach(cb => cb(data.participants))
-    })
-
     this.socket.on('chat-message', (message: SocketMessage) => {
       this.messageCallbacks.forEach(cb => cb({
         ...message,
@@ -223,10 +204,6 @@ class SocketManager {
 
     this.socket.on('host-video-state-request', () => {
       this.hostVideoStateRequestCallbacks.forEach(cb => cb())
-    })
-
-    this.socket.on('room-sync', (data) => {
-      this.roomSyncCallbacks.forEach(cb => cb(data))
     })
 
     this.socket.on('voice-message', (data) => {
@@ -283,95 +260,43 @@ class SocketManager {
   }
 
   joinRoom(roomId: string): Promise<any> {
+    if (!this.socket) {
+      return new Promise((resolve, reject) => {
+        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
+        this.connect()
+      })
+    }
+
+    if (!this.isConnected) {
+      return new Promise((resolve, reject) => {
+        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
+        try { this.connect() } catch (e) {}
+      })
+    }
+
+    if (!this.isAuthenticated) {
+      return new Promise((resolve, reject) => {
+        this.pendingJoin = { roomId, resolve, reject, attempts: 0 }
+        try { this.authenticate() } catch (e) {}
+      })
+    }
+
+    this.roomId = roomId
+    this.socket.emit('join-room', { roomId })
     return new Promise((resolve, reject) => {
-      const attemptJoin = async (attempt = 1) => {
-        try {
-          // Ensure socket is connected
-          if (!this.socket || !this.isConnected) {
-            this.connect()
-            await this.waitForConnection(5000)
-          }
-
-          // Ensure authentication
-          if (!this.isAuthenticated) {
-            this.authenticate()
-            await this.waitForAuthentication(5000)
-          }
-
-          // Now attempt to join room
-          this.roomId = roomId
-          this.socket!.emit('join-room', { roomId })
-
-          // Wait for room-joined event with timeout
-          const joinTimeout = setTimeout(() => {
-            if (attempt < 20) {
-              console.log(`[Socket] Join attempt ${attempt} failed, retrying...`)
-              attemptJoin(attempt + 1)
-            } else {
-              reject(new Error('Failed to join room after 20  attempts'))
-            }
-          }, 20000)
-
-          const onJoined = (room: any) => {
-            if (room && room.id === roomId) {
-              clearTimeout(joinTimeout)
-              resolve(room)
-            }
-          }
-
-          const cleanup = this.onRoomInfo(onJoined)
-          
-          // Store cleanup for timeout
-          setTimeout(() => cleanup(), 10000)
-
-        } catch (error) {
-          if (attempt < 3) {
-            setTimeout(() => attemptJoin(attempt + 1), 1000)
-          } else {
-            reject(error)
-          }
+      const onJoined = (room: any) => {
+        if (room && room.id === roomId) {
+          resolve(room)
+          off()
         }
       }
-
-      attemptJoin()
-    })
-  }
-
-  private waitForConnection(timeoutMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.isConnected) {
-        resolve()
-        return
-      }
-
-      const timeout = setTimeout(() => {
-        reject(new Error('Connection timeout'))
-      }, timeoutMs)
-
-      const cleanup = this.onConnect(() => {
-        clearTimeout(timeout)
-        cleanup()
-        resolve()
-      })
-    })
-  }
-
-  private waitForAuthentication(timeoutMs: number): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.isAuthenticated) {
-        resolve()
-        return
-      }
-
-      const timeout = setTimeout(() => {
-        reject(new Error('Authentication timeout'))
-      }, timeoutMs)
-
-      const cleanup = this.onAuthenticated(() => {
-        clearTimeout(timeout)
-        cleanup()
-        resolve()
-      })
+      let off = this.onRoomInfo(onJoined)
+      const t = setTimeout(() => {
+        reject(new Error('join-room timeout'))
+        off()
+      }, 15000)
+      const origOff = off
+      off = () => { clearTimeout(t); origOff() }
     })
   }
 
@@ -544,19 +469,6 @@ class SocketManager {
 
   onHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks.push(cb); return () => { this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(c => c !== cb) } }
   offHostVideoStateRequest(cb: () => void) { this.hostVideoStateRequestCallbacks = this.hostVideoStateRequestCallbacks.filter(c => c !== cb) }
-
-  onRoomSync(cb: (data: any) => void) { this.roomSyncCallbacks.push(cb); return () => { this.roomSyncCallbacks = this.roomSyncCallbacks.filter(c => c !== cb) } }
-  offRoomSync(cb: (data: any) => void) { this.roomSyncCallbacks = this.roomSyncCallbacks.filter(c => c !== cb) }
-
-  requestRoomSync(roomId: string) {
-    if (!this.socket || !this.roomId) return
-    this.socket.emit('request-room-sync', { roomId })
-  }
-
-  forceRoomSync(roomId: string) {
-    if (!this.socket || !this.roomId) return
-    this.socket.emit('force-room-sync', { roomId })
-  }
 
   disconnect() {
     if (this.socket) {

@@ -67,7 +67,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const [webrtcStatus, setWebrtcStatus] = useState<any>(null);
   const [showConnectedText, setShowConnectedText] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting');
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [inviteLink, setInviteLink] = useState('');
@@ -97,8 +96,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const controlsTimeoutRef = useRef<number | null>(null);
 
   const isHost = user?.id === roomInfo?.host?.id;
-
-  console.log("______________room info_________________",roomInfo)
 
   const handleVideoVolumeChange = useCallback((vol: number) => {
     setVolume(vol);
@@ -598,7 +595,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
 
   useEffect(() => {
-    console.log("______________room info_________________",roomInfo)
     const t = setInterval(() => {
       const status = webrtcManager.getConnectionStatus();
       setWebrtcStatus(status);
@@ -606,19 +602,9 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         setShowConnectedText(true);
         setTimeout(() => setShowConnectedText(false), 1000);
       }
-      
-      // Update connection status
-      const isSocketConnected = socketManager.isSocketConnected();
-      if (isSocketConnected && roomInfo) {
-        setConnectionStatus('connected');
-      } else if (isSocketConnected) {
-        setConnectionStatus('connecting');
-      } else {
-        setConnectionStatus('disconnected');
-      }
     }, 2000);
     return () => clearInterval(t);
-  }, [roomInfo]);
+  }, []);
 
   const waitForSocketAuth = (token: string, timeoutMs = 8000) =>
     new Promise<void>((resolve, reject) => {
@@ -672,7 +658,6 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         if (!currentUser || !token) {
           // Store the room ID to redirect after login
           localStorage.setItem('redirectAfterLogin', `/theater/${roomId}`);
-          console.log('Redirecting to login page');
           router.push("/auth");
           return;
         }
@@ -689,48 +674,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         socketManager.onError((err) => {
           if (!mounted) return;
           if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
-          
-          // Handle connection errors by attempting to reconnect
-          if (err === "Connection timeout" || err === "connect_error") {
-            setTimeout(() => {
-              if (mounted && !socketManager.isSocketConnected()) {
-                const token = getToken();
-                if (token) {
-                  socketManager.connect({ auth: { token } });
-                  params.then(p => {
-                    setTimeout(() => {
-                      socketManager.joinRoom(p.roomId).catch(() => {});
-                    }, 1000);
-                  }).catch(() => {});
-                }
-              }
-            }, 3000);
-          } else {
-            setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
-          }
+          setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
         });
 
         await waitForSocketAuth(token);
         authInFlight = false;
-
-        // Add connection monitoring for the host like hos
-        socketManager.onConnect(() => {
-          if (!mounted) return;
-          setConnectionStatus('connecting');
-        });
-
-        socketManager.onAuthenticated(() => {
-
-          if (!mounted) return;
-          // Auto-rejoin room if we were disconnected
-          params.then(p => {
-            if (p.roomId && (!roomInfo || connectionStatus === 'disconnected')) {
-              setTimeout(() => {
-                socketManager.joinRoom(p.roomId).catch(() => {});
-              }, 500);
-            }
-          }).catch(() => {});
-        });
 
         socketManager.onRoomInfo((room) => {
           if (!mounted) return;
@@ -738,57 +686,36 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
           
+          const wasHost = webrtcManager.isHostUser();
           const isNowHost = currentUser.id === room.host?.id;
           
-          webrtcManager.setLocalUserId(currentUser.id);
           webrtcManager.setHostStatus(isNowHost);
           webrtcManager.ensureSocketListeners();
           
-          // Delay WebRTC connections to ensure socket room is fully established
-          setTimeout(() => {
-            if (!mounted) return;
-            
-            if (isNowHost) {
-              webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
-            } else {
-              // For non-host users, establish connection with the host
-              const hostId = room.host?.id;
-              if (hostId && hostId !== currentUser.id) {
-                // Single delayed connection attempt
+          if (isNowHost) {
+            webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+          } else {
+            // For non-host users, establish connection with the host
+            const hostId = room.host?.id;
+            if (hostId && hostId !== currentUser.id) {
+              // Retry connection multiple times for new users
+              for (let i = 0; i < 3; i++) {
                 setTimeout(() => {
                   if (mounted) {
                     webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
                   }
-                }, 1500);
+                }, 1000 + (i * 2000)); // 1s, 3s, 5s delays
               }
             }
-          }, 1000);
+          }
           
           setIsLoading(false);
-        });
-
-        // Handle room sync events
-        socketManager.onRoomSync?.((data) => {
-          if (!mounted || !data.room) return;
-          setRoomInfo(data.room);
-          const unique = data.room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
-          setParticipants(unique);
         });
 
         socketManager.onParticipantsChange((parts) => {
           if (!mounted) return;
           const unique = parts.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
-          
-          // Update room info participant count if there's a mismatch
-          if (roomInfo && roomInfo.participants.length !== unique.length) {
-            setRoomInfo(prev => prev ? { ...prev, participants: unique } : null);
-            
-            // Force room sync if there's a significant mismatch
-            params.then(p => {
-              socketManager.forceRoomSync(p.roomId);
-            }).catch(() => {});
-          }
           
           if (webrtcManager.isHostUser()) {
             // Host ensures connections to all participants
@@ -806,39 +733,30 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
           }
         });
 
-        // Periodic connection check for WebRTC peers and room sync
+        // Periodic connection check for WebRTC peers
         connectionCheckInterval = setInterval(() => {
           if (!mounted) return;
           
-          const resolved = params.then(p => p.roomId);
-          resolved.then(roomId => {
-            // Request room sync every 2 seconds to ensure consistency
-            socketManager.requestRoomSync(roomId);
+          // If we're the host, check for unconnected peers and retry connections
+          if (webrtcManager.isHostUser()) {
+            const connectedPeers = webrtcManager.getConnectedPeers();
+            const allPeerIds = participants.map(p => p.user.id).filter(id => id !== currentUser.id);
+            const unconnectedPeers = allPeerIds.filter(id => !connectedPeers.includes(id));
             
-            // If we're the host, check for unconnected peers and retry connections
-            if (webrtcManager.isHostUser()) {
-              const connectedPeers = webrtcManager.getConnectedPeers();
-              const allPeerIds = participants.map(p => p.user.id).filter(id => id !== currentUser.id);
-              const unconnectedPeers = allPeerIds.filter(id => !connectedPeers.includes(id));
-              
-              unconnectedPeers.forEach(peerId => {
-                webrtcManager.createOfferWithRetriesPublic(peerId, 2, 1000).catch(() => {});
-              });
-              
-              // Host performs room health check
-              socketManager.socket?.emit('host-room-check', { roomId });
-            } else {
-              // For non-host users, ensure connection with host
-              const hostId = roomInfo?.host?.id;
-              if (hostId && hostId !== currentUser.id) {
-                const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
-                if (!isConnected) {
-                  webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
-                }
+            unconnectedPeers.forEach(peerId => {
+              webrtcManager.createOfferWithRetriesPublic(peerId, 2, 1000).catch(() => {});
+            });
+          } else {
+            // For non-host users, ensure connection with host
+            const hostId = roomInfo?.host?.id;
+            if (hostId && hostId !== currentUser.id) {
+              const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
+              if (!isConnected) {
+                webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
               }
             }
-          }).catch(() => {});
-        }, 2000); // Check every 2 seconds for better room sync
+          }
+        }, 5000); // Check every 5 seconds for better connection reliability
 
         socketManager.onMessage((msg) => {
           try {
@@ -1100,7 +1018,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
       setYoutubeContainerKey(0);
 
-      // Clear the connection check interval testing
+      // Clear the connection check interval
       if (connectionCheckInterval) {
         clearInterval(connectionCheckInterval);
       }
@@ -1109,7 +1027,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       webrtcManager.cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, router,roomInfo]);
+  }, [params, router]);
 
   const handleVideoControl = (data: any) => {
     if (!data) return;

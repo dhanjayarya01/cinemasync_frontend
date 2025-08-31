@@ -14,7 +14,6 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { socketManager } from "@/lib/socket"
 import { Play, Users, Lock, Globe, Crown, Plus, Search, LogOut, User, Loader2, X } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -215,11 +214,7 @@ export default function RoomsPage() {
       const data = await response.json()
 
       if (data.success) {
-        const roomId = data.room.id
-        await socketManager.joinRoom(roomId)
-        socketManager.connect()
-        console.log('_______Host socket joined room____', roomId)
-        router.push(`/theater/${roomId}`)
+        router.push(`/theater/${data.room.id}`)
       } else {
         alert(data.error || 'Failed to create room')
       }
