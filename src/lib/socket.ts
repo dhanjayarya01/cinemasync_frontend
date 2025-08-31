@@ -304,13 +304,13 @@ class SocketManager {
 
           // Wait for room-joined event with timeout
           const joinTimeout = setTimeout(() => {
-            if (attempt < 3) {
+            if (attempt < 20) {
               console.log(`[Socket] Join attempt ${attempt} failed, retrying...`)
               attemptJoin(attempt + 1)
             } else {
-              reject(new Error('Failed to join room after 3 attempts'))
+              reject(new Error('Failed to join room after 20  attempts'))
             }
-          }, 8000)
+          }, 20000)
 
           const onJoined = (room: any) => {
             if (room && room.id === roomId) {

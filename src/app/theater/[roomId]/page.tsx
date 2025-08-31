@@ -598,6 +598,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
 
   useEffect(() => {
+    console.log("______________room info_________________",roomInfo)
     const t = setInterval(() => {
       const status = webrtcManager.getConnectionStatus();
       setWebrtcStatus(status);
@@ -1108,7 +1109,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
       webrtcManager.cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, router]);
+  }, [params, router,roomInfo]);
 
   const handleVideoControl = (data: any) => {
     if (!data) return;
