@@ -98,6 +98,8 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
 
   const isHost = user?.id === roomInfo?.host?.id;
 
+  console.log("______________room info_________________")
+
   const handleVideoVolumeChange = useCallback((vol: number) => {
     setVolume(vol);
     if (videoRef.current) {
