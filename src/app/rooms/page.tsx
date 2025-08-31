@@ -18,6 +18,7 @@ import { Play, Users, Lock, Globe, Crown, Plus, Search, LogOut, User, Loader2, X
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { getToken, logout } from "@/lib/auth"
+import { socketManager } from "@/lib/socket"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
 
@@ -214,6 +215,13 @@ export default function RoomsPage() {
       const data = await response.json()
 
       if (data.success) {
+         try { socketManager.connect?.({ auth: { token } }); 
+         console.log('___Socket re-used existing connection');
+        } catch { socketManager.connect();
+          console.log('___Socket created new connection');
+         }
+
+        console.log('Socket connected:', );
         router.push(`/theater/${data.room.id}`)
       } else {
         alert(data.error || 'Failed to create room')

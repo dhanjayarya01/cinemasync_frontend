@@ -663,11 +663,11 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         }
         setUser(currentUser);
 
-        try {
-          socketManager.connect?.({ auth: { token } });
-        } catch {
-          socketManager.connect();
-        }
+         try { socketManager.connect?.({ auth: { token } }); 
+         console.log('___Socket re-used existing connection threater page',currentUser);
+        } catch { socketManager.connect();
+          console.log('___Socket created new connection');
+         }
 
         webrtcManager.ensureSocketListeners();
 

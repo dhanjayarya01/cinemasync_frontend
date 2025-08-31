@@ -7,6 +7,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
 import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth"
+import { socketManager } from "@/lib/socket"
 
 export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false)
@@ -44,6 +45,14 @@ export default function AuthPage() {
 
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
+        
+         try { 
+          const token=data.token;
+          socketManager.connect?.({ auth: { token } }); 
+                 console.log('___Socket re-used existing connection in the auth');
+                } catch { socketManager.connect();
+                  console.log('___Socket created new connection');
+                 }
         localStorage.removeItem('redirectAfterLogin')
         router.push(redirectPath)
       } else {
