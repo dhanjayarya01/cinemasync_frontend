@@ -7,6 +7,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
 import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth"
+import { socketManager } from "@/lib/socket"
 
 export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false)
@@ -37,7 +38,7 @@ export default function AuthPage() {
     try {
       const data = await googleLogin(credentialResponse.credential)
 
-
+      console.log('______Google login data:____', data)
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
 
@@ -45,6 +46,11 @@ export default function AuthPage() {
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
         localStorage.removeItem('redirectAfterLogin')
+        console.log('Redirecting to:______', redirectPath)
+        const match = redirectPath.match(/\/theater\/([^\/?#]+)/i);
+        const roomId = match ? match[1] : redirectPath.split("/").pop() || "";
+        await socketManager.joinRoom(roomId)
+        console.log('Joined room via socket:_____', roomId)
         router.push(redirectPath)
       } else {
         router.push("/rooms")

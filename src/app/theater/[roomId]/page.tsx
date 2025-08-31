@@ -669,6 +669,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         if (!currentUser || !token) {
           // Store the room ID to redirect after login
           localStorage.setItem('redirectAfterLogin', `/theater/${roomId}`);
+          console.log('Redirecting to login page');
           router.push("/auth");
           return;
         }
@@ -696,7 +697,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
                   params.then(p => {
                     setTimeout(() => {
                       socketManager.joinRoom(p.roomId).catch(() => {});
-                    }, 2000);
+                    }, 1000);
                   }).catch(() => {});
                 }
               }
@@ -716,6 +717,7 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
         });
 
         socketManager.onAuthenticated(() => {
+
           if (!mounted) return;
           // Auto-rejoin room if we were disconnected
           params.then(p => {
