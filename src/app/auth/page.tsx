@@ -50,6 +50,7 @@ export default function AuthPage() {
         const match = redirectPath.match(/\/theater\/([^\/?#]+)/i);
         const roomId = match ? match[1] : redirectPath.split("/").pop() || "";
         await socketManager.joinRoom(roomId)
+        socketManager.connect()
         console.log('Joined room via socket:_____', roomId)
         router.push(redirectPath)
       } else {

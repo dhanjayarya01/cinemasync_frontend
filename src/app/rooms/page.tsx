@@ -217,6 +217,7 @@ export default function RoomsPage() {
       if (data.success) {
         const roomId = data.room.id
         await socketManager.joinRoom(roomId)
+        socketManager.connect()
         console.log('_______Host socket joined room____', roomId)
         router.push(`/theater/${roomId}`)
       } else {
