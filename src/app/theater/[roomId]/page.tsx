@@ -836,8 +836,11 @@ try {
                   // Host should connect to new user
                   const newUserId = msg.user?.id;
                   if (newUserId && newUserId !== currentUser.id) {
+                    console.log('host user sending for webrtc connetction ')
                     setTimeout(() => {
+                      
                       webrtcManager.ensureConnectionsTo([newUserId], currentUser.id);
+                      console.log('host user sending for webrtc connetction timeout ',webrtcManager.ensureConnectionsTo([newUserId], currentUser.id))
                     }, 1000);
                   }
                 } else {
