@@ -22,7 +22,10 @@ export default function AuthPage() {
 
       verifyToken(token).then(isValid => {
         if (isValid) {
-          router.push("/rooms")
+          setTimeout(() => {
+            
+            router.push("/rooms")
+          }, 3000);
         } else {
 
           logout()
@@ -49,7 +52,6 @@ export default function AuthPage() {
 
    const token =  getToken();
 try {
-   console.log('___Token retrieved:', token);
   if (!socketManager.isSocketConnected?.()) {
     socketManager.connect?.({ auth: { token } });
     console.log('___Socket connect requested with token');
@@ -67,9 +69,11 @@ try {
     console.error('Socket reconnect failed', e);
   }
 }
-
-        localStorage.removeItem('redirectAfterLogin')
-        router.push(redirectPath)
+setTimeout(() => {
+  
+          localStorage.removeItem('redirectAfterLogin')
+          router.push(redirectPath)
+}, 4000);
       } else {
         router.push("/rooms")
       }

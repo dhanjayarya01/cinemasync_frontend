@@ -3,6 +3,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -637,17 +638,35 @@ useEffect(() => {
 
 
 
-  useEffect(() => {
-    const t = setInterval(() => {
-      const status = webrtcManager.getConnectionStatus();
-      setWebrtcStatus(status);
-      if (status.connectedPeers > 0) {
-        setShowConnectedText(true);
-        setTimeout(() => setShowConnectedText(false), 1000);
-      }
-    }, 2000);
-    return () => clearInterval(t);
-  }, []);
+
+const [showRetry, setShowRetry] = useState(false);
+
+useEffect(() => {
+  
+  const timer = setTimeout(() => {
+    const status = webrtcManager.getConnectionStatus();
+    if (status.connectedPeers === 0) {
+      setShowRetry(true);
+    }
+  }, 8000);
+
+  return () => clearTimeout(timer);
+}, []);
+
+useEffect(() => {
+  const t = setInterval(() => {
+    const status = webrtcManager.getConnectionStatus();
+    setWebrtcStatus(status);
+
+    if (status.connectedPeers > 0) {
+      setShowConnectedText(true);
+      setShowRetry(false); 
+      setTimeout(() => setShowConnectedText(false), 1000);
+    }
+  }, 2000);
+  return () => clearInterval(t);
+}, []);
+
 
   const waitForSocketAuth = (token: string, timeoutMs = 8000) =>
     new Promise<void>((resolve, reject) => {
@@ -705,15 +724,6 @@ useEffect(() => {
           return;
         }
         setUser(currentUser);
-        console.log('___current user in threater page ',currentUser);
-
-//   try {
-//   socketManager.connect?.({ auth: { token } });
-//   console.log('___Socket re-used existing connection threater page');
-// } catch {
-//   socketManager.connect();
-//   console.log('___Socket created new connection');
-// }
 
 try {
   if (!socketManager.isSocketConnected?.()) {
@@ -1971,14 +1981,31 @@ try {
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl animate-pulse" style={{animationDelay: '4s'}}></div>
       </div>
 
-      <div className="fixed top-4 left-4 z-50">
-        {showConnectedText ?
-          <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-medium shadow-xl backdrop-blur-sm border border-emerald-400/20 animate-fade-in">
-            ✓ Connected
-          </div> :
-          <div className={`w-3 h-3 rounded-full shadow-xl transition-all duration-500 ${webrtcStatus?.connectedPeers > 0 ? "bg-emerald-500 animate-ping" : "bg-red-500"}`} />
-        }
-      </div>
+    <div className="fixed top-4 left-4 z-50">
+  {showConnectedText ? (
+    <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-medium shadow-xl backdrop-blur-sm border border-emerald-400/20 animate-fade-in">
+      ✓ Connected
+    </div>
+  ) : showRetry ? (
+    <button
+      onClick={() => window.location.reload()}
+      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-600/90 hover:bg-red-700 text-white text-xs font-medium shadow-lg backdrop-blur-sm border border-red-400/20 animate-fade-in"
+    >
+      <AlertTriangle className="w-4 h-4" />
+      Retry Connect
+      <RotateCcw className="w-4 h-4" />
+    </button>
+  ) : (
+    <div
+      className={`w-3 h-3 rounded-full shadow-xl transition-all duration-500 ${
+        webrtcStatus?.connectedPeers > 0
+          ? "bg-emerald-500 animate-ping"
+          : "bg-red-500"
+      }`}
+    />
+  )}
+</div>
+
 
       <header className="bg-gradient-to-r from-slate-800/90 via-slate-700/90 to-slate-800/90 border-b border-slate-600/30 px-2 sm:px-4 py-2 sm:py-3 backdrop-blur-md shadow-lg">
         <div className="flex items-center justify-between">
