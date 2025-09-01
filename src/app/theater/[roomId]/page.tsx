@@ -798,6 +798,7 @@ try {
           if (!mounted) return;
           
           // If we're the host, check for unconnected peers and retry connections
+          //for host only and for the retry method for the rtc 
           if (webrtcManager.isHostUser()) {
             const connectedPeers = webrtcManager.getConnectedPeers();
             const allPeerIds = participants.map(p => p.user.id).filter(id => id !== currentUser.id);
