@@ -1,112 +1,122 @@
-"use client"
+"use client";
 
-import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Play, Shield, Lock, CheckCircle, Loader2 } from "lucide-react"
-import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google'
-import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth"
-import { socketManager } from "@/lib/socket"
+import { useState, useEffect } from "react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Play, Shield, Lock, CheckCircle, Loader2 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
+import { getToken, verifyToken, googleLogin, logout } from "@/lib/auth";
+import { socketManager } from "@/lib/socket";
 
 export default function AuthPage() {
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState("")
-  const router = useRouter()
-
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const router = useRouter();
 
   useEffect(() => {
-    const token = getToken()
+    const token = getToken();
 
     if (token) {
-
-      verifyToken(token).then(isValid => {
+      verifyToken(token).then((isValid) => {
         if (isValid) {
-          setIsLoading(true)
+          setIsLoading(true);
           setTimeout(() => {
-            setIsLoading(false)
-            router.push("/rooms")
+            setIsLoading(false);
+            router.push("/rooms");
           }, 3000);
         } else {
-
-          logout()
+          logout();
         }
-      })
+      });
     }
-  }, [router])
+  }, [router]);
 
   const handleGoogleSuccess = async (credentialResponse: any) => {
-    setIsLoading(true)
-    setError("")
+    setIsLoading(true);
+    setError("");
 
     try {
-      const data = await googleLogin(credentialResponse.credential)
+      const data = await googleLogin(credentialResponse.credential);
 
+      localStorage.setItem("token", data.token);
+      localStorage.setItem("user", JSON.stringify(data.user));
 
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('user', JSON.stringify(data.user))
-
-
-      const redirectPath = localStorage.getItem('redirectAfterLogin')
+      const redirectPath = localStorage.getItem("redirectAfterLogin");
       if (redirectPath) {
-        
-
-   const token =  getToken();
-try {
-  if (!socketManager.isSocketConnected?.()) {
-    socketManager.connect?.({ auth: { token } });
-    console.log('___Socket connect requested with token');
-  } else if (!socketManager.isSocketAuthenticated?.()) {
-    socketManager.authenticateWithToken?.(token);
-    console.log('___Requested socket authenticateWithToken');
-  } else {
-    console.log('___Socket already connected & authenticated');
-  }
-} catch (err) {
-  try {
-    socketManager.reconnectWithToken?.(token);
-    console.log('___Forced socket reconnect with token');
-  } catch (e) {
-    console.error('Socket reconnect failed', e);
-  }
-}
-setIsLoading(true);
-setTimeout(() => {
-  setIsLoading(false);
-  
-          localStorage.removeItem('redirectAfterLogin')
-          router.push(redirectPath)
-}, 4000);
+        const token = getToken();
+        try {
+          if (!socketManager.isSocketConnected?.()) {
+            socketManager.connect?.({ auth: { token } });
+            console.log("___Socket connect requested with token");
+          } else if (!socketManager.isSocketAuthenticated?.()) {
+            socketManager.authenticateWithToken?.(token);
+            console.log("___Requested socket authenticateWithToken");
+          } else {
+            console.log("___Socket already connected & authenticated");
+          }
+        } catch (err) {
+          try {
+            socketManager.reconnectWithToken?.(token);
+            console.log("___Forced socket reconnect with token");
+          } catch (e) {
+            console.error("Socket reconnect failed", e);
+          }
+        }
+        setIsLoading(true);
+        setTimeout(() => {
+          localStorage.removeItem("redirectAfterLogin");
+          setIsLoading(false);
+          router.push(redirectPath);
+        }, 4000);
       } else {
-        router.push("/rooms")
+        setIsLoading(true);
+        router.push("/rooms");
       }
     } catch (error) {
-      console.error('Google login error:', error)
-      setError(error instanceof Error ? error.message : 'Failed to authenticate with Google')
+      console.error("Google login error:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Failed to authenticate with Google"
+      );
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }
+  };
 
   const handleGoogleError = () => {
-    setError('Google login failed. Please try again.')
-    setIsLoading(false)
-  }
+    setError("Google login failed. Please try again.");
+    setIsLoading(false);
+  };
 
   return (
-    <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ''}>
+    <GoogleOAuthProvider
+      clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ""}
+    >
       <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 flex items-center justify-center p-4 overflow-hidden">
         <div className="w-full max-w-md relative z-10">
           {/* Header */}
           <div className="text-center mb-8 animate-fadeInDown">
-            <Link href="/" className="inline-flex items-center space-x-2 mb-6 group">
+            <Link
+              href="/"
+              className="inline-flex items-center space-x-2 mb-6 group"
+            >
               <Play className="h-8 w-8 text-purple-400 transition-all duration-300 group-hover:scale-110 group-hover:rotate-12" />
               <span className="text-2xl font-bold text-white transition-colors duration-300 group-hover:text-purple-300">
                 CinemaSync
               </span>
             </Link>
             <h1 className="text-3xl font-bold text-white mb-2">Secure Login</h1>
-            <p className="text-gray-300">Sign in safely with your Google account</p>
+            <p className="text-gray-300">
+              Sign in safely with your Google account
+            </p>
           </div>
 
           <Card className="bg-white/10 backdrop-blur-sm border-white/20 hover-lift animate-scaleIn">
@@ -114,9 +124,12 @@ setTimeout(() => {
               <div className="mx-auto mb-4 w-16 h-16 bg-gradient-to-br from-green-400 to-blue-500 rounded-full flex items-center justify-center">
                 <Shield className="w-8 h-8 text-white" />
               </div>
-              <CardTitle className="text-white text-xl">Secure Google Authentication</CardTitle>
+              <CardTitle className="text-white text-xl">
+                Secure Google Authentication
+              </CardTitle>
               <CardDescription className="text-gray-300">
-                Sign in safely with your Google account - no passwords to remember
+                Sign in safely with your Google account - no passwords to
+                remember
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -159,11 +172,10 @@ setTimeout(() => {
                 </div>
               </div>
 
-
-
               <div className="text-center text-xs text-gray-400 bg-gray-800/30 rounded-lg p-3">
                 <Lock className="w-4 h-4 inline mr-1" />
-                Your privacy is protected. We only access your basic profile information.
+                Your privacy is protected. We only access your basic profile
+                information.
               </div>
             </CardContent>
           </Card>
@@ -174,11 +186,17 @@ setTimeout(() => {
             </p>
             <p className="text-gray-500 text-xs">
               By continuing, you agree to our{" "}
-              <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
+              <a
+                href="#"
+                className="text-purple-300 hover:text-purple-200 transition-colors duration-300"
+              >
                 Terms of Service
               </a>{" "}
               and{" "}
-              <a href="#" className="text-purple-300 hover:text-purple-200 transition-colors duration-300">
+              <a
+                href="#"
+                className="text-purple-300 hover:text-purple-200 transition-colors duration-300"
+              >
                 Privacy Policy
               </a>
             </p>
@@ -186,5 +204,5 @@ setTimeout(() => {
         </div>
       </div>
     </GoogleOAuthProvider>
-  )
+  );
 }
