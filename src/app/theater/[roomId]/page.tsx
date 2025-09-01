@@ -96,6 +96,49 @@ export default function TheaterPage({ params }: { params: Promise<{ roomId: stri
   const controlsTimeoutRef = useRef<number | null>(null);
 
   const isHost = user?.id === roomInfo?.host?.id;
+  const [toasts, setToasts] = useState<{ id: string; text: string }[]>([]);
+
+
+const showToast = useCallback((text: string) => {
+  const id = `t-${Date.now()}-${Math.random()}`;
+  setToasts((s) => [...s, { id, text }]);
+  setTimeout(() => {
+    setToasts((s) => s.filter((t) => t.id !== id));
+  }, 2000);
+}, []);
+
+useEffect(() => {
+  const offMsg = socketManager.onMessage((msg) => {
+    console.log("Socket message received:", msg);
+    if (!msg?.message) return;
+    try {
+      const parsed = JSON.parse(msg.message);
+      if (parsed?.type === 'user-joined' && parsed.user) {
+        showToast(`${parsed.user.name} joined`);
+      }
+    } catch {}
+  });
+
+  const prevIdsRef = { current: [] as string[] };
+  const offParts = socketManager.onParticipantsChange((parts) => {
+    try {
+      const ids = (parts || []).map((p) => p.user.id);
+      const prev = prevIdsRef.current || [];
+      const newIds = ids.filter((id) => !prev.includes(id));
+      if (newIds.length > 0) {
+        const newUsers = parts.filter((p) => newIds.includes(p.user.id)).map((p) => p.user);
+        newUsers.forEach((u) => showToast(`${u.name} joined`));
+      }
+      prevIdsRef.current = ids;
+    } catch {}
+  });
+
+  return () => {
+    offMsg?.();
+    offParts?.();
+  };
+}, [showToast]);
+
 
   const handleVideoVolumeChange = useCallback((vol: number) => {
     setVolume(vol);
@@ -2466,6 +2509,13 @@ try {
           </div>
         )
       }
+      <div style={{ position: 'fixed', top: 16, right: 16, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8 }}>
+  {toasts.map((t) => (
+    <div key={t.id} className="px-4 py-2 rounded-lg shadow-md bg-gray-900 text-white text-sm" style={{ minWidth: 160 }}>
+      {t.text}
+    </div>
+  ))}
+</div>
     </div>
   );
 }
