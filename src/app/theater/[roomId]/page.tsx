@@ -1981,19 +1981,19 @@ try {
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl animate-pulse" style={{animationDelay: '4s'}}></div>
       </div>
 
- <div className="fixed top-4 left-4 z-50">
+<div className="fixed top-4 left-4 z-50">
   {showConnectedText ? (
-    // Connected banner (all users)
+    
     <div className="px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-xs font-medium shadow-xl backdrop-blur-sm border border-emerald-400/20 animate-fade-in">
       ✓ Connected
     </div>
   ) : (
     <>
-      {showRetry? (
-        
+      {webrtcStatus?.connectedPeers > 0 ? (
+        // Green dot (all users)
         <div className="w-3 h-3 rounded-full shadow-xl bg-emerald-500 animate-ping" />
-      ) : !isHost ? (
-        
+      ) : !isHost && showRetry ? (
+        // Retry button (non-host only, after 10s if not connected)
         <button
           onClick={() => window.location.reload()}
           className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-600/90 hover:bg-red-700 text-white text-xs font-medium shadow-lg backdrop-blur-sm border border-red-400/20 animate-fade-in"
@@ -2003,12 +2003,13 @@ try {
           <RotateCcw className="w-4 h-4" />
         </button>
       ) : (
-        
+        // Red dot (host always, non-host before retry delay)
         <div className="w-3 h-3 rounded-full shadow-xl bg-red-500" />
       )}
     </>
   )}
 </div>
+
 
 
 
