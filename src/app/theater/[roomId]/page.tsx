@@ -705,31 +705,35 @@ useEffect(() => {
           return;
         }
         setUser(currentUser);
+        console.log('___current user in threater page ',currentUser);
 
-        try {
-  socketManager.connect?.({ auth: { token } });
-  console.log('___Socket re-used existing connection threater page');
-} catch {
-  socketManager.connect();
-  console.log('___Socket created new connection');
-}
-//checking if the user is connected with new token
-// ensure the existing socket (if any) actually authenticates with the current token
+//   try {
+//   socketManager.connect?.({ auth: { token } });
+//   console.log('___Socket re-used existing connection threater page');
+// } catch {
+//   socketManager.connect();
+//   console.log('___Socket created new connection');
+// }
+
 try {
-  socketManager.authenticateWithToken?.(token);
-  socketManager.authenticateWithToken?.(token);
-  console.log('___Requested socket authenticateWithToken__',socketManager.authenticateWithToken?.(token));
-    socketManager.disconnect?.();
+  if (!socketManager.isSocketConnected?.()) {
     socketManager.connect?.({ auth: { token } });
-    console.log('___Forced socket reconnect with token');
+    console.log('___Socket connect requested with token');
+  } else if (!socketManager.isSocketAuthenticated?.()) {
+    socketManager.authenticateWithToken?.(token);
+    console.log('___Requested socket authenticateWithToken');
+  } else {
+    console.log('___Socket already connected & authenticated');
+  }
 } catch (err) {
-  // fallback: force a reconnect with token
   try {
-    socketManager.disconnect?.();
-    socketManager.connect?.({ auth: { token } });
+    socketManager.reconnectWithToken?.(token);
     console.log('___Forced socket reconnect with token');
-  } catch (e) {}
+  } catch (e) {
+    console.error('Socket reconnect failed', e);
+  }
 }
+
 
 
         webrtcManager.ensureSocketListeners();

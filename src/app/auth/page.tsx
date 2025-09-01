@@ -45,6 +45,15 @@ export default function AuthPage() {
 
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
+        
+  try {
+  const token = getToken();
+  socketManager.connect?.({ auth: { token } });
+  console.log('___Socket re-used existing connection threater page');
+} catch {
+  socketManager.connect();
+  console.log('___Socket created new connection');
+}
         localStorage.removeItem('redirectAfterLogin')
         router.push(redirectPath)
       } else {
