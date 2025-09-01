@@ -22,8 +22,9 @@ export default function AuthPage() {
 
       verifyToken(token).then(isValid => {
         if (isValid) {
+          setIsLoading(true)
           setTimeout(() => {
-            
+            setIsLoading(false)
             router.push("/rooms")
           }, 3000);
         } else {
@@ -69,7 +70,9 @@ try {
     console.error('Socket reconnect failed', e);
   }
 }
+setIsLoading(true);
 setTimeout(() => {
+  setIsLoading(false);
   
           localStorage.removeItem('redirectAfterLogin')
           router.push(redirectPath)
