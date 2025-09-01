@@ -824,12 +824,15 @@ try {
         }, 5000); // Check every 5 seconds for better connection reliability
 
         socketManager.onMessage((msg) => {
+          console.log('Socket message received:___ in threater page ', msg);
           try {
             if (msg.message) {
               const parsed = JSON.parse(msg.message);
               if (parsed?.type === "user-joined") {
+                console.log('pier join ________ processing ')
                 // When a new user joins, ensure WebRTC connections
                 if (webrtcManager.isHostUser()) {
+                  console.log('pier join ________ host ensuring connection to new user')
                   // Host should connect to new user
                   const newUserId = msg.user?.id;
                   if (newUserId && newUserId !== currentUser.id) {
@@ -839,8 +842,10 @@ try {
                   }
                 } else {
                   // Non-host users should ensure connection with host
+                  console.log('non host user ')
                   const hostId = roomInfo?.host?.id;
                   if (hostId && hostId !== currentUser.id) {
+                    console.log('non host user user sending for webrtc connetction ')
                     const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
                     if (!isConnected) {
                       setTimeout(() => {
