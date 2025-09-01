@@ -215,12 +215,7 @@ export default function RoomsPage() {
       const data = await response.json()
 
       if (data.success) {
-         try { socketManager.connect?.({ auth: { token } }); 
-         console.log('___Socket re-used existing connection');
-        } catch { socketManager.connect();
-          console.log('___Socket created new connection');
-         }
-
+      
         console.log('Socket connected:', );
         router.push(`/theater/${data.room.id}`)
       } else {
