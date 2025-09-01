@@ -46,14 +46,28 @@ export default function AuthPage() {
       const redirectPath = localStorage.getItem('redirectAfterLogin')
       if (redirectPath) {
         
+
+try {
+   const token = getToken();
+   console.log('___Token retrieved:', token);
+  if (!socketManager.isSocketConnected?.()) {
+    socketManager.connect?.({ auth: { token } });
+    console.log('___Socket connect requested with token');
+  } else if (!socketManager.isSocketAuthenticated?.()) {
+    socketManager.authenticateWithToken?.(token);
+    console.log('___Requested socket authenticateWithToken');
+  } else {
+    console.log('___Socket already connected & authenticated');
+  }
+} catch (err) {
   try {
-  const token = getToken();
-  socketManager.connect?.({ auth: { token } });
-  console.log('___Socket re-used existing connection threater page');
-} catch {
-  socketManager.connect();
-  console.log('___Socket created new connection');
+    socketManager.reconnectWithToken?.(token);
+    console.log('___Forced socket reconnect with token');
+  } catch (e) {
+    console.error('Socket reconnect failed', e);
+  }
 }
+
         localStorage.removeItem('redirectAfterLogin')
         router.push(redirectPath)
       } else {
