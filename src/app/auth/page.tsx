@@ -47,8 +47,8 @@ export default function AuthPage() {
       if (redirectPath) {
         
 
+   const token =  getToken();
 try {
-   const token = getToken();
    console.log('___Token retrieved:', token);
   if (!socketManager.isSocketConnected?.()) {
     socketManager.connect?.({ auth: { token } });
