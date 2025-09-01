@@ -717,7 +717,11 @@ useEffect(() => {
 // ensure the existing socket (if any) actually authenticates with the current token
 try {
   socketManager.authenticateWithToken?.(token);
-  console.log('___Requested socket authenticateWithToken');
+  socketManager.authenticateWithToken?.(token);
+  console.log('___Requested socket authenticateWithToken__',socketManager.authenticateWithToken?.(token));
+    socketManager.disconnect?.();
+    socketManager.connect?.({ auth: { token } });
+    console.log('___Forced socket reconnect with token');
 } catch (err) {
   // fallback: force a reconnect with token
   try {

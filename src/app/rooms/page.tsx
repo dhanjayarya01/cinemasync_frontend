@@ -215,8 +215,8 @@ export default function RoomsPage() {
       const data = await response.json()
 
       if (data.success) {
-      
-        console.log('Socket connected:', );
+        const connectedstatus=socketManager.connect?.({ auth: { token } });
+        console.log('Socket connected: status in room ', connectedstatus);
         router.push(`/theater/${data.room.id}`)
       } else {
         alert(data.error || 'Failed to create room')
@@ -230,6 +230,9 @@ export default function RoomsPage() {
   }
 
   const handleJoinRoom = (roomId: string) => {
+    const token = getToken()
+    const connectedstatus=socketManager.connect?.({ auth: { token } });
+    console.log('Socket connected: status in room direct join  ', connectedstatus);
     router.push(`/theater/${roomId}`)
   }
 
