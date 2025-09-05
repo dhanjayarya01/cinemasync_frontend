@@ -108,37 +108,37 @@ const showToast = useCallback((text: string) => {
   }, 2000);
 }, []);
 
-useEffect(() => {
-  const offMsg = socketManager.onMessage((msg) => {
-    console.log("Socket message received:", msg);
-    if (!msg?.message) return;
-    try {
-      const parsed = JSON.parse(msg.message);
-      if (parsed?.type === 'user-joined' && parsed.user) {
-        showToast(`${parsed.user.name} joined`);
-      }
-    } catch {}
-  });
+  useEffect(() => {
+    const offMsg = socketManager.onMessage((msg) => {
+      console.log("Socket message received:", msg);
+      if (!msg?.message) return;
+      try {
+        const parsed = JSON.parse(msg.message);
+        if (parsed?.type === 'user-joined' && parsed.user) {
+          showToast(`${parsed.user.name} joined`);
+        }
+      } catch {}
+    });
 
-  const prevIdsRef = { current: [] as string[] };
-  const offParts = socketManager.onParticipantsChange((parts) => {
-    try {
-      const ids = (parts || []).map((p) => p.user.id);
-      const prev = prevIdsRef.current || [];
-      const newIds = ids.filter((id) => !prev.includes(id));
-      if (newIds.length > 0) {
-        const newUsers = parts.filter((p) => newIds.includes(p.user.id)).map((p) => p.user);
-        newUsers.forEach((u) => showToast(`${u.name} joined`));
-      }
-      prevIdsRef.current = ids;
-    } catch {}
-  });
+    const prevIdsRef = { current: [] as string[] };
+    const offParts = socketManager.onParticipantsChange((parts) => {
+      try {
+        const ids = (parts || []).map((p) => p.user.id);
+        const prev = prevIdsRef.current || [];
+        const newIds = ids.filter((id) => !prev.includes(id));
+        if (newIds.length > 0) {
+          const newUsers = parts.filter((p) => newIds.includes(p.user.id)).map((p) => p.user);
+          newUsers.forEach((u) => showToast(`${u.name} joined`));
+        }
+        prevIdsRef.current = ids;
+      } catch {}
+    });
 
-  return () => {
-    offMsg?.();
-    offParts?.();
-  };
-}, [showToast]);
+    return () => {
+      offMsg?.();
+      offParts?.();
+    };
+  }, [showToast]);
 
 
   const handleVideoVolumeChange = useCallback((vol: number) => {
@@ -748,7 +748,7 @@ try {
 
         webrtcManager.ensureSocketListeners();
 
-        socketManager.onError((err) => {
+        const offError = socketManager.onError((err) => {
           if (!mounted) return;
           if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
           setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
@@ -757,18 +757,18 @@ try {
         await waitForSocketAuth(token);
         authInFlight = false;
 
-        socketManager.onRoomInfo((room) => {
+        const offRoomInfo = socketManager.onRoomInfo((room) => {
           if (!mounted) return;
           setRoomInfo(room);
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
-          
+
           const wasHost = webrtcManager.isHostUser();
           const isNowHost = currentUser.id === room.host?.id;
-          
+
           webrtcManager.setHostStatus(isNowHost);
           webrtcManager.ensureSocketListeners();
-          
+
           if (isNowHost) {
             webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
           } else {
@@ -785,16 +785,16 @@ try {
               }
             }
           }
-          
+
           setIsLoading(false);
         });
     
         console.log('room info recived ',roomInfo);
-        socketManager.onParticipantsChange((parts) => {
+        const offParticipantsChange = socketManager.onParticipantsChange((parts) => {
           if (!mounted) return;
           const unique = parts.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
-          
+
           if (webrtcManager.isHostUser()) {
             // Host ensures connections to all participants
             webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
@@ -837,7 +837,7 @@ try {
           }
         }, 5000); // Check every 5 seconds for better connection reliability
 
-        socketManager.onMessage((msg) => {
+        const offMessage = socketManager.onMessage((msg) => {
           console.log('Socket message received:___ in threater page ', msg);
           try {
             if (msg.message) {
@@ -852,7 +852,7 @@ try {
                   if (newUserId && newUserId !== currentUser.id) {
                     console.log('host user sending for webrtc connetction ')
                     setTimeout(() => {
-                      
+
                       webrtcManager.ensureConnectionsTo([newUserId], currentUser.id);
                       console.log('host user sending for webrtc connetction timeout ',webrtcManager.ensureConnectionsTo([newUserId], currentUser.id))
                     }, 1000);
@@ -892,9 +892,9 @@ try {
           if (!isChatVisible && msg.user?.id !== user?.id) setUnreadCount(c => c + 1);
         });
 
-        socketManager.onVideoControl((data) => handleVideoControl(data));
+        const offVideoControl = socketManager.onVideoControl((data) => handleVideoControl(data));
 
-        socketManager.onVideoMetadata((metadata) => {
+        const offVideoMetadata = socketManager.onVideoMetadata((metadata) => {
           if (!mounted) return;
 
           const shouldProcessMetadata = metadata.type === "youtube" || !isHost;
@@ -978,7 +978,7 @@ try {
           }
         });
 
-        socketManager.onVideoStateSync((data) => {
+        const offVideoStateSync = socketManager.onVideoStateSync((data) => {
           if (!mounted) return;
           const vs = data.videoState || data;
           const metadata = vs.metadata || data.metadata;

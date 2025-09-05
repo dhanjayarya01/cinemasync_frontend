@@ -90,6 +90,7 @@ class SocketManager {
   private webrtcIceCandidateCallbacks: ((data: { from: string; candidate: any }) => void)[] = []
   private webrtcPeerJoinedCallbacks: ((data: { peerId: string }) => void)[] = []
   private webrtcPeerLeftCallbacks: ((data: { peerId: string }) => void)[] = []
+  private webrtcPeerReadyCallbacks: ((data: { from?: string; peerId: string }) => void)[] = []
 
   private videoStateSyncCallbacks: ((data: any) => void)[] = []
   private hostVideoStateRequestCallbacks: (() => void)[] = []
@@ -97,6 +98,7 @@ class SocketManager {
   private pendingOffers: { from: string; offer: any }[] = []
   private pendingAnswers: { from: string; answer: any }[] = []
   private pendingIceCandidates: { from: string; candidate: any }[] = []
+  private pendingPeerReadies: { from: string; peerId: string }[] = []
 
   private connectCallbacks: (() => void)[] = []
   private authenticatedCallbacks: ((data: any) => void)[] = []
@@ -246,6 +248,11 @@ class SocketManager {
       this.webrtcPeerLeftCallbacks.forEach(cb => cb({ peerId: data.peerId }))
     })
 
+    this.socket.on('peer-ready', (data) => {
+      if (this.webrtcPeerReadyCallbacks.length > 0) this.webrtcPeerReadyCallbacks.forEach(cb => cb({ from: data.from, peerId: data.peerId }))
+      else this.pendingPeerReadies.push({ from: data.from, peerId: data.peerId })
+    })
+
     this.socket.on('error', (data) => {
       this.errorCallbacks.forEach(cb => cb((data && data.error) || 'Unknown socket error'))
     })
@@ -359,6 +366,11 @@ class SocketManager {
     this.socket.emit('ice-candidate', { candidate, to })
   }
 
+  sendPeerReady(peerId: string) {
+    if (!this.socket) return
+    this.socket.emit('peer-ready', { peerId })
+  }
+
   async sendVoiceMessage(audioBlob: Blob, duration: number, isPrivate: boolean, user: any) {
     if (!this.socket || !this.roomId) return
     const dataUrl = await new Promise<string>((res, rej) => {
@@ -466,6 +478,17 @@ class SocketManager {
 
   onWebRTCPeerLeft(cb: (d: { peerId: string }) => void) { this.webrtcPeerLeftCallbacks.push(cb); return () => { this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(c => c !== cb) } }
   offWebRTCPeerLeft(cb: (d: { peerId: string }) => void) { this.webrtcPeerLeftCallbacks = this.webrtcPeerLeftCallbacks.filter(c => c !== cb) }
+
+  onWebRTCPeerReady(cb: (d: { from?: string; peerId: string }) => void) {
+    this.webrtcPeerReadyCallbacks.push(cb)
+    if (this.pendingPeerReadies.length) {
+      const queued = this.pendingPeerReadies.slice()
+      this.pendingPeerReadies = []
+      queued.forEach(it => { try { cb(it) } catch (e) {} })
+    }
+    return () => { this.webrtcPeerReadyCallbacks = this.webrtcPeerReadyCallbacks.filter(c => c !== cb) }
+  }
+  offWebRTCPeerReady(cb: (d: { from?: string; peerId: string }) => void) { this.webrtcPeerReadyCallbacks = this.webrtcPeerReadyCallbacks.filter(c => c !== cb) }
 
   onVideoStateSync(cb: (d: any) => void) { this.videoStateSyncCallbacks.push(cb); return () => { this.videoStateSyncCallbacks = this.videoStateSyncCallbacks.filter(c => c !== cb) } }
   offVideoStateSync(cb: (d: any) => void) { this.videoStateSyncCallbacks = this.videoStateSyncCallbacks.filter(c => c !== cb) }

@@ -32,6 +32,7 @@ class WebRTCManager {
     iceCandidate: (data: { from: string; candidate: any }) => void
     peerJoined: (data: { peerId: string }) => void
     peerLeft: (data: { peerId: string }) => void
+    peerReady: (data: { from?: string; peerId: string }) => void
   } | null = null
   private totalChunksExpected = 0
   private pendingRemoteCandidates: Map<string, RTCIceCandidateInit[]> = new Map()
@@ -99,18 +100,28 @@ class WebRTCManager {
   }
 
   private setupSocketListeners() {
-    if (this.socketCallbacks) return
+    if (this.socketCallbacks) {
+      // Clean up previous listeners to prevent duplicates
+      socketManager.offWebRTCOffer(this.socketCallbacks.offer)
+      socketManager.offWebRTCAnswer(this.socketCallbacks.answer)
+      socketManager.offWebRTCIceCandidate(this.socketCallbacks.iceCandidate)
+      socketManager.offWebRTCPeerJoined(this.socketCallbacks.peerJoined)
+      socketManager.offWebRTCPeerLeft(this.socketCallbacks.peerLeft)
+      socketManager.offWebRTCPeerReady(this.socketCallbacks.peerReady)
+    }
     const offerCallback = (data: { from: string; offer: any }) => { this.handleOffer(data.from, data.offer) }
     const answerCallback = (data: { from: string; answer: any }) => { this.handleAnswer(data.from, data.answer) }
     const iceCandidateCallback = (data: { from: string; candidate: any }) => { this.handleIceCandidate(data.from, data.candidate) }
     const peerJoinedCallback = (data: { peerId: string }) => { this.handlePeerJoined(data.peerId) }
     const peerLeftCallback = (data: { peerId: string }) => { this.handlePeerLeft(data.peerId) }
-    this.socketCallbacks = { offer: offerCallback, answer: answerCallback, iceCandidate: iceCandidateCallback, peerJoined: peerJoinedCallback, peerLeft: peerLeftCallback }
+    const peerReadyCallback = (data: { from?: string; peerId: string }) => { this.handlePeerReady(data.peerId) }
+    this.socketCallbacks = { offer: offerCallback, answer: answerCallback, iceCandidate: iceCandidateCallback, peerJoined: peerJoinedCallback, peerLeft: peerLeftCallback, peerReady: peerReadyCallback }
     socketManager.onWebRTCOffer(offerCallback)
     socketManager.onWebRTCAnswer(answerCallback)
     socketManager.onWebRTCIceCandidate(iceCandidateCallback)
     socketManager.onWebRTCPeerJoined(peerJoinedCallback)
     socketManager.onWebRTCPeerLeft(peerLeftCallback)
+    socketManager.onWebRTCPeerReady(peerReadyCallback)
     socketManager.onAuthenticated((data: any) => {
       if (data && data.user && data.user.id) this.localUserId = data.user.id
     })
@@ -155,7 +166,8 @@ class WebRTCManager {
     const iceServers = envTurn && Array.isArray(envTurn) ? envTurn : [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' }
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'turn:turn.example.com:3478', username: 'user', credential: 'pass' } // Add TURN server
     ]
     const configuration: RTCConfiguration = { iceServers }
     const pc = new RTCPeerConnection(configuration)
@@ -222,6 +234,9 @@ class WebRTCManager {
       })
       this.pendingRemoteCandidates.delete(peerId)
     }
+
+    // Send peer-ready signal after initialization
+    socketManager.sendPeerReady(peerId)
 
     return pc
   }
@@ -410,9 +425,8 @@ class WebRTCManager {
 
   private handlePeerJoined(peerId: string) {
     if (this.isHost) {
-      setTimeout(() => {
-        this.createOfferWithRetries(peerId, 4, 800).catch(() => {})
-      }, 1000)
+      // Host will wait for peer-ready before creating offers
+      this.initializePeerConnection(peerId, true).catch(() => {})
     } else {
       setTimeout(() => {
         this.initializePeerConnection(peerId, false).catch(() => {})
@@ -422,6 +436,15 @@ class WebRTCManager {
 
   private handlePeerLeft(peerId: string) {
     this.removePeer(peerId)
+  }
+
+  private handlePeerReady(peerId: string) {
+    if (this.isHost) {
+      // Host can now create offer since peer is ready
+      setTimeout(() => {
+        this.createOfferWithRetries(peerId, 4, 800).catch(() => {})
+      }, 500)
+    }
   }
 
   async createOffer(peerId: string): Promise<RTCSessionDescriptionInit> {
