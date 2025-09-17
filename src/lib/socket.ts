@@ -122,8 +122,12 @@ class SocketManager {
     })
 
     this.socket.on('connect', () => {
+      console.log('[Socket] Connected to server')
       this.isConnected = true
-      if (!this.isAuthenticated) this.authenticate()
+      if (!this.isAuthenticated) {
+        console.log('[Socket] Authenticating after connect...')
+        this.authenticate()
+      }
       this.connectCallbacks.forEach(cb => { try { cb() } catch (e) {} })
     })
 
@@ -138,10 +142,12 @@ class SocketManager {
     })
 
     this.socket.on('authenticated', (data) => {
+      console.log('[Socket] Authentication successful:', data)
       this.isAuthenticated = true
       try { this.authUserId = data?.user?.id ?? null } catch { this.authUserId = null }
       this.authenticatedCallbacks.forEach(cb => { try { cb(data) } catch (e) {} })
       if (this.pendingJoin) {
+        console.log('[Socket] Processing pending join after authentication')
         const pj = this.pendingJoin
         this.pendingJoin = null
         this.joinRoom(pj.roomId).then(() => pj.resolve && pj.resolve()).catch((e) => pj.reject && pj.reject(e))
@@ -226,31 +232,49 @@ class SocketManager {
     })
 
     this.socket.on('offer', (data) => {
+      console.log('[Socket] Received WebRTC offer from:', data.from)
       if (this.webrtcOfferCallbacks.length > 0) this.webrtcOfferCallbacks.forEach(cb => cb({ from: data.from, offer: data.offer }))
-      else this.pendingOffers.push({ from: data.from, offer: data.offer })
+      else {
+        console.log('[Socket] No offer callbacks, queuing offer')
+        this.pendingOffers.push({ from: data.from, offer: data.offer })
+      }
     })
 
     this.socket.on('answer', (data) => {
+      console.log('[Socket] Received WebRTC answer from:', data.from)
       if (this.webrtcAnswerCallbacks.length > 0) this.webrtcAnswerCallbacks.forEach(cb => cb({ from: data.from, answer: data.answer }))
-      else this.pendingAnswers.push({ from: data.from, answer: data.answer })
+      else {
+        console.log('[Socket] No answer callbacks, queuing answer')
+        this.pendingAnswers.push({ from: data.from, answer: data.answer })
+      }
     })
 
     this.socket.on('ice-candidate', (data) => {
+      console.log('[Socket] Received ICE candidate from:', data.from)
       if (this.webrtcIceCandidateCallbacks.length > 0) this.webrtcIceCandidateCallbacks.forEach(cb => cb({ from: data.from, candidate: data.candidate }))
-      else this.pendingIceCandidates.push({ from: data.from, candidate: data.candidate })
+      else {
+        console.log('[Socket] No ICE candidate callbacks, queuing candidate')
+        this.pendingIceCandidates.push({ from: data.from, candidate: data.candidate })
+      }
     })
 
     this.socket.on('peer-joined', (data) => {
+      console.log('[Socket] Peer joined:', data.peerId)
       this.webrtcPeerJoinedCallbacks.forEach(cb => cb({ peerId: data.peerId }))
     })
 
     this.socket.on('peer-left', (data) => {
+      console.log('[Socket] Peer left:', data.peerId)
       this.webrtcPeerLeftCallbacks.forEach(cb => cb({ peerId: data.peerId }))
     })
 
     this.socket.on('peer-ready', (data) => {
+      console.log('[Socket] Peer ready:', data.peerId)
       if (this.webrtcPeerReadyCallbacks.length > 0) this.webrtcPeerReadyCallbacks.forEach(cb => cb({ from: data.from, peerId: data.peerId }))
-      else this.pendingPeerReadies.push({ from: data.from, peerId: data.peerId })
+      else {
+        console.log('[Socket] No peer ready callbacks, queuing ready event')
+        this.pendingPeerReadies.push({ from: data.from, peerId: data.peerId })
+      }
     })
 
     this.socket.on('error', (data) => {

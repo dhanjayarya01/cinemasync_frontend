@@ -686,12 +686,12 @@ useEffect(() => {
         resolve();
       });
 
-      socketManager.authenticate?.(token);
+      socketManager.authenticateWithToken?.(token);
 
       if (!offAuth) {
         const poll = () => {
           if (done) return;
-          if (socketManager.isAuthenticated?.()) {
+          if (socketManager.isSocketAuthenticated?.()) {
             done = true;
             clearTimeout(timer);
             resolve();
@@ -750,8 +750,8 @@ try {
 
         const offError = socketManager.onError((err) => {
           if (!mounted) return;
-          if (authInFlight && (err === "Not authenticated" || err?.error === "Not authenticated")) return;
-          setError(typeof err === "string" ? err : err?.error || "Unknown socket error");
+          if (authInFlight && (err === "Not authenticated" || (typeof err === 'object' && err?.error === "Not authenticated"))) return;
+          setError(typeof err === "string" ? err : (typeof err === 'object' && err?.error) || "Unknown socket error");
         });
 
         await waitForSocketAuth(token);
@@ -759,29 +759,41 @@ try {
 
         const offRoomInfo = socketManager.onRoomInfo((room) => {
           if (!mounted) return;
+          console.log('[Theater] Room info received:', room);
           setRoomInfo(room);
           const unique = room.participants.filter((p, i, arr) => i === arr.findIndex(x => x.user.id === p.user.id));
           setParticipants(unique);
 
           const wasHost = webrtcManager.isHostUser();
           const isNowHost = currentUser.id === room.host?.id;
+          console.log('[Theater] Host status:', { wasHost, isNowHost, currentUserId: currentUser.id, hostId: room.host?.id });
 
+          webrtcManager.setLocalUserId(currentUser.id);
           webrtcManager.setHostStatus(isNowHost);
-          webrtcManager.ensureSocketListeners();
+          
+          // Ensure WebRTC listeners are properly set up
+          setTimeout(() => {
+            webrtcManager.ensureSocketListeners();
+          }, 500);
 
           if (isNowHost) {
-            webrtcManager.ensureConnectionsTo(unique.map(p => p.user.id), currentUser.id);
+            console.log('[Theater] Setting up host connections...');
+            const participantIds = unique.map(p => p.user.id).filter(id => id !== currentUser.id);
+            setTimeout(() => {
+              webrtcManager.ensureConnectionsTo(participantIds, currentUser.id);
+            }, 1500);
           } else {
-            // For non-host users, establish connection with the host
+            console.log('[Theater] Setting up client connection to host...');
             const hostId = room.host?.id;
             if (hostId && hostId !== currentUser.id) {
-              // Retry connection multiple times for new users
+              // Multiple retry attempts for client connection
               for (let i = 0; i < 3; i++) {
                 setTimeout(() => {
                   if (mounted) {
-                    webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
+                    console.log(`[Theater] Client connection attempt ${i + 1} to host ${hostId}`);
+                    webrtcManager.initializePeerConnection(hostId, false).catch(console.error);
                   }
-                }, 1000 + (i * 2000)); // 1s, 3s, 5s delays
+                }, 2000 + (i * 3000)); // 2s, 5s, 8s delays
               }
             }
           }
@@ -838,36 +850,34 @@ try {
         }, 5000); // Check every 5 seconds for better connection reliability
 
         const offMessage = socketManager.onMessage((msg) => {
-          console.log('Socket message received:___ in threater page ', msg);
+          console.log('[Theater] Socket message received:', msg);
           try {
             if (msg.message) {
               const parsed = JSON.parse(msg.message);
               if (parsed?.type === "user-joined") {
-                console.log('pier join ________ processing ')
+                console.log('[Theater] Processing user-joined event...');
                 // When a new user joins, ensure WebRTC connections
                 if (webrtcManager.isHostUser()) {
-                  console.log('pier join ________ host ensuring connection to new user')
+                  console.log('[Theater] Host ensuring connection to new user');
                   // Host should connect to new user
                   const newUserId = msg.user?.id;
                   if (newUserId && newUserId !== currentUser.id) {
-                    console.log('host user sending for webrtc connetction ')
+                    console.log('[Theater] Host establishing WebRTC connection to:', newUserId);
                     setTimeout(() => {
-
                       webrtcManager.ensureConnectionsTo([newUserId], currentUser.id);
-                      console.log('host user sending for webrtc connetction timeout ',webrtcManager.ensureConnectionsTo([newUserId], currentUser.id))
-                    }, 1000);
+                    }, 2000); // Increased delay for better reliability
                   }
                 } else {
                   // Non-host users should ensure connection with host
-                  console.log('non host user ')
+                  console.log('[Theater] Non-host user checking host connection');
                   const hostId = roomInfo?.host?.id;
                   if (hostId && hostId !== currentUser.id) {
-                    console.log('non host user user sending for webrtc connetction ')
+                    console.log('[Theater] Non-host establishing WebRTC connection to host:', hostId);
                     const isConnected = webrtcManager.getConnectedPeers().includes(hostId);
                     if (!isConnected) {
                       setTimeout(() => {
-                        webrtcManager.initializePeerConnection(hostId, false).catch(() => {});
-                      }, 1000);
+                        webrtcManager.initializePeerConnection(hostId, false).catch(console.error);
+                      }, 1500);
                     }
                   }
                 }

@@ -48,6 +48,10 @@ class WebRTCManager {
     onVoiceStreamEnded?: (peerId: string) => void
   } = {}
   private localUserId: string | null = null
+  private connectionTimeouts: Map<string, NodeJS.Timeout> = new Map()
+  private offerTimeouts: Map<string, NodeJS.Timeout> = new Map()
+  private isInitialized = false
+  private connectionAttempts: Map<string, number> = new Map()
 
   constructor() {
     this.ensureSocketListeners()
@@ -150,8 +154,18 @@ class WebRTCManager {
   }
 
   async initializePeerConnection(peerId: string, isInitiator: boolean = false): Promise<RTCPeerConnection> {
+    console.log(`[WebRTC] Initializing peer connection: ${peerId}, isInitiator: ${isInitiator}`)
+    
+    // Clear any existing timeouts for this peer
+    const existingTimeout = this.connectionTimeouts.get(peerId)
+    if (existingTimeout) {
+      clearTimeout(existingTimeout)
+      this.connectionTimeouts.delete(peerId)
+    }
+
     const existing = this.peers.get(peerId)
-    if (existing) {
+    if (existing && existing.pc.connectionState !== 'failed' && existing.pc.connectionState !== 'closed') {
+      console.log(`[WebRTC] Using existing connection for ${peerId}, state: ${existing.pc.connectionState}`)
       if (this.isHost && isInitiator && !existing.dataChannel) {
         try {
           const dc = existing.pc.createDataChannel('video-chunks', { ordered: true, maxRetransmits: 3 })
@@ -162,14 +176,28 @@ class WebRTCManager {
       return existing.pc
     }
 
+    // Clean up existing failed connection
+    if (existing) {
+      console.log(`[WebRTC] Cleaning up failed connection for ${peerId}`)
+      try { existing.pc.close() } catch {}
+      this.peers.delete(peerId)
+    }
+
     const envTurn = (typeof process !== 'undefined' && (process as any).env && (process as any).env.NEXT_PUBLIC_TURN_SERVERS) ? JSON.parse((process as any).env.NEXT_PUBLIC_TURN_SERVERS) : null
     const iceServers = envTurn && Array.isArray(envTurn) ? envTurn : [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'turn:turn.example.com:3478', username: 'user', credential: 'pass' } // Add TURN server
+      // Add reliable TURN servers
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
     ]
-    const configuration: RTCConfiguration = { iceServers }
+    const configuration: RTCConfiguration = { 
+      iceServers,
+      iceCandidatePoolSize: 10,
+      iceTransportPolicy: 'all'
+    }
     const pc = new RTCPeerConnection(configuration)
     const peer: WebRTCPeer = { id: peerId, pc, isConnected: false, connectionState: 'new' }
 
@@ -208,20 +236,36 @@ class WebRTCManager {
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState
       peer.connectionState = state
+      console.log(`[WebRTC] Connection state changed for ${peerId}: ${state}`)
+      
+      // Clear any existing timeout
+      const timeout = this.connectionTimeouts.get(peerId)
+      if (timeout) {
+        clearTimeout(timeout)
+        this.connectionTimeouts.delete(peerId)
+      }
+      
       if (state === 'connected') {
         peer.isConnected = true
         this.retryCounts.set(peerId, 0)
+        this.connectionAttempts.set(peerId, 0)
+        console.log(`[WebRTC] Successfully connected to ${peerId}`)
+      } else if (state === 'connecting') {
+        // Set a timeout for connection attempts
+        const connectionTimeout = setTimeout(() => {
+          if (pc.connectionState === 'connecting') {
+            console.log(`[WebRTC] Connection timeout for ${peerId}, retrying...`)
+            this.handleConnectionRetry(peerId)
+          }
+        }, 15000) // 15 second timeout
+        this.connectionTimeouts.set(peerId, connectionTimeout)
       } else if (state === 'failed' || state === 'disconnected') {
         peer.isConnected = false
-        const count = this.retryCounts.get(peerId) || 0
-        if (count < 3) {
-          this.retryCounts.set(peerId, count + 1)
-          try {
-            pc.createOffer({ iceRestart: true }).then((offer) => pc.setLocalDescription(offer).then(() => socketManager.sendOffer(offer, peerId))).catch(() => {})
-          } catch (e) {}
-        } else {
-          this.removePeer(peerId)
-        }
+        console.log(`[WebRTC] Connection ${state} for ${peerId}, attempting retry...`)
+        this.handleConnectionRetry(peerId)
+      } else if (state === 'closed') {
+        console.log(`[WebRTC] Connection closed for ${peerId}`)
+        this.removePeer(peerId)
       }
     }
 
@@ -235,10 +279,45 @@ class WebRTCManager {
       this.pendingRemoteCandidates.delete(peerId)
     }
 
-    // Send peer-ready signal after initialization
-    socketManager.sendPeerReady(peerId)
+    // Send peer-ready signal after initialization with delay
+    setTimeout(() => {
+      socketManager.sendPeerReady(peerId)
+      console.log(`[WebRTC] Sent peer-ready signal for ${peerId}`)
+    }, 500)
 
     return pc
+  }
+
+  private handleConnectionRetry(peerId: string) {
+    const attempts = this.connectionAttempts.get(peerId) || 0
+    const maxAttempts = 5
+    
+    if (attempts >= maxAttempts) {
+      console.log(`[WebRTC] Max retry attempts reached for ${peerId}, removing peer`)
+      this.removePeer(peerId)
+      return
+    }
+    
+    this.connectionAttempts.set(peerId, attempts + 1)
+    console.log(`[WebRTC] Retry attempt ${attempts + 1}/${maxAttempts} for ${peerId}`)
+    
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+    const delay = Math.min(1000 * Math.pow(2, attempts), 16000)
+    
+    setTimeout(() => {
+      const peer = this.peers.get(peerId)
+      if (peer && (peer.pc.connectionState === 'failed' || peer.pc.connectionState === 'disconnected')) {
+        console.log(`[WebRTC] Executing retry for ${peerId} after ${delay}ms delay`)
+        
+        if (this.isHost) {
+          // Host creates new offer with ICE restart
+          this.createOfferWithRetries(peerId, 1, 0).catch(console.error)
+        } else {
+          // Non-host re-initializes connection
+          this.initializePeerConnection(peerId, false).catch(console.error)
+        }
+      }
+    }, delay)
   }
 
   private setupDataChannel(peerId: string, dataChannel: RTCDataChannel, isHost: boolean) {
@@ -637,7 +716,9 @@ class WebRTCManager {
       connectedPeers: Array.from(this.peers.values()).filter(p => p.isConnected).length,
       totalPeers: this.peers.size,
       isLiveVoiceActive: this._isLiveVoiceModeActive,
-      hasLiveVoiceStream: !!this.liveVoiceStream
+      hasLiveVoiceStream: !!this.liveVoiceStream,
+      isHost: this.isHost,
+      peers: this.getPeers().map(peer => ({ id: peer.id, connected: peer.isConnected, connectionState: peer.connectionState }))
     }
   }
 
@@ -715,7 +796,7 @@ class WebRTCManager {
             draw()
             const canvasStream = (canvas as any).captureStream?.(25)
             if (canvasStream) {
-              canvasStream.getVideoTracks().forEach(t => combined.addTrack(t))
+              canvasStream.getVideoTracks().forEach((t: MediaStreamTrack) => combined.addTrack(t))
             }
             if (rafId) setTimeout(() => { cancelAnimationFrame(rafId!) }, 1000)
           }
@@ -939,14 +1020,7 @@ class WebRTCManager {
     return this.createOfferWithRetries(peerId, attempts, delayMs)
   }
 
-  getConnectionStatus() {
-    return {
-      isHost: this.isHost,
-      connectedPeers: this.getConnectedPeersCount(),
-      totalPeers: this.peers.size,
-      peers: this.getPeers().map(peer => ({ id: peer.id, connected: peer.isConnected, connectionState: peer.connectionState }))
-    }
-  }
+
 }
 
 export const webrtcManager = new WebRTCManager()
